@@ -19,7 +19,6 @@ type Requester interface {
 // Позже здесь можно добавить сохранение ошибок в БД
 // или отправку задач в retry/dead-letter pipeline.
 func RequestWorker(workerId int, reqCh <-chan RequestData, requester Requester) {
-	// TODO должны ли мы оставить цикл бесконечным?
 	for req := range reqCh {
 		fmt.Printf("[worker %d] started request to %s\n", workerId, req.URL)
 		resp := requester.Do(context.Background(), req)
@@ -34,6 +33,6 @@ func RequestWorker(workerId int, reqCh <-chan RequestData, requester Requester) 
 			resp.URL,
 			resp.StatusCode,
 		)
-		// TODO будем передавать response дальше
+		// TODO будем передавать response дальше в какой-то канал
 	}
 }
