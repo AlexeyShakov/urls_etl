@@ -16,6 +16,7 @@ func (p *PipelineRepo) SavePipeline(ctx context.Context, pipeline domain.Pipelin
 	query := `
         INSERT INTO pipelines (status, finished_at)
         VALUES ($1, $2)
+        RETURNING id
     `
 
 	var id int64
@@ -29,10 +30,12 @@ func (p *PipelineRepo) SavePipeline(ctx context.Context, pipeline domain.Pipelin
 
 	return id, mapPostgresError(err)
 }
+
 func (p *PipelineRepo) SavePipelineTask(ctx context.Context, task domain.PipelineTask) (int64, error) {
 	query := `
-        INSERT INTO pipelines (pipeline_id, source_url, details, status)
+        INSERT INTO pipeline_tasks (pipeline_id, source_url, details, status)
         VALUES ($1, $2, $3, $4)
+        RETURNING id
     `
 
 	var id int64

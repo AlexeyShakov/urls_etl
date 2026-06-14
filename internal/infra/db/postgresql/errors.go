@@ -3,6 +3,7 @@ package postgresql
 import (
 	"context"
 	"errors"
+	"fmt"
 	"urls_etl/internal/domain"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -14,7 +15,7 @@ func mapPostgresError(err error) error {
 	}
 
 	if errors.Is(err, context.DeadlineExceeded) {
-		return domain.ErrStorageUnavailableRetryable
+		return fmt.Errorf("%w: %v", domain.ErrStorageUnavailableRetryable, err)
 	}
 
 	var pgErr *pgconn.PgError
@@ -26,18 +27,18 @@ func mapPostgresError(err error) error {
 			"08006", // connection_failure
 			"08003", // connection_does_not_exist
 			"08000": // connection_exception
-			return domain.ErrStorageUnavailableRetryable
+			return fmt.Errorf("%w: %v", domain.ErrStorageUnavailableRetryable, err)
 
 		case "23503": // foreign_key_violation
-			return domain.ErrInvalidData
+			return fmt.Errorf("%w: %v", domain.ErrInvalidData, err)
 
 		case "23505": // unique_violation
-			return domain.ErrConflict
+			return fmt.Errorf("%w: %v", domain.ErrConflict, err)
 
 		case "23502": // not_null_violation
-			return domain.ErrInvalidData
+			return fmt.Errorf("%w: %v", domain.ErrInvalidData, err)
 		}
 	}
 
-	return domain.ErrStorageUnavailableNonRetryable
+	return fmt.Errorf("%w: %v", domain.ErrStorageUnavailableNonRetryable, err)
 }

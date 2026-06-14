@@ -6,9 +6,12 @@ import (
 	"os"
 	"urls_etl/internal/config"
 	"urls_etl/internal/infra/mock_server"
+
+	"github.com/joho/godotenv"
 )
 
 func main() {
+	_ = godotenv.Load()
 	logger := slog.New(
 		slog.NewTextHandler(
 			os.Stdout,

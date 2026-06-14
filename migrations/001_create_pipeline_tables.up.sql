@@ -3,7 +3,7 @@ CREATE TABLE pipelines (
                            status VARCHAR(32) NOT NULL,
                            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                            finished_at TIMESTAMPTZ,
-                           updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                           updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE pipeline_tasks (
