@@ -2,6 +2,7 @@ package mock_server
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 )
 
@@ -15,13 +16,17 @@ import (
 //
 //	{"item_ids": [1001, 1002, 1003]}
 func GetItemsHandler(w http.ResponseWriter, r *http.Request) {
-	if MaybeWriteRandomError(w) {
-		return
-	}
 	var req GetItemsRequest
-
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	slog.Debug(
+		"getItems request",
+		"user_id", req.UserID,
+	)
+
+	if MaybeWriteRandomError(w) {
 		return
 	}
 
@@ -32,6 +37,12 @@ func GetItemsHandler(w http.ResponseWriter, r *http.Request) {
 			req.UserID*10 + 3,
 		},
 	}
+	slog.Debug(
+		"getItems response",
+		"user_id", req.UserID,
+		"status_code", http.StatusOK,
+		"response", resp,
+	)
 
 	w.Header().Set("Content-Type", "application/json")
 
@@ -46,13 +57,18 @@ func GetItemsHandler(w http.ResponseWriter, r *http.Request) {
 // Иногда может вернуть случайную ошибку, чтобы pipeline мог отрабатывать
 // retry и non-retryable сценарии.
 func FillItemsHandler(w http.ResponseWriter, r *http.Request) {
-	if MaybeWriteRandomError(w) {
-		return
-	}
 	var req ItemIDsRequest
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	slog.Debug(
+		"fillItems request",
+		"item_ids", req.ItemIDs,
+	)
+
+	if MaybeWriteRandomError(w) {
 		return
 	}
 
@@ -63,6 +79,12 @@ func FillItemsHandler(w http.ResponseWriter, r *http.Request) {
 			"item description 3",
 		},
 	}
+	slog.Debug(
+		"fillItems response",
+		"item_ids", req.ItemIDs,
+		"status_code", http.StatusOK,
+		"response", resp,
+	)
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
@@ -81,14 +103,18 @@ func FillItemsHandler(w http.ResponseWriter, r *http.Request) {
 // Иногда может вернуть случайную ошибку, чтобы pipeline мог отрабатывать
 // retry и non-retryable сценарии.
 func ScoreItemsHandler(w http.ResponseWriter, r *http.Request) {
-	if MaybeWriteRandomError(w) {
-		return
-	}
 
 	var req ItemIDsRequest
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	slog.Debug(
+		"scoreItems request",
+		"item_ids", req.ItemIDs,
+	)
+	if MaybeWriteRandomError(w) {
 		return
 	}
 
@@ -101,6 +127,12 @@ func ScoreItemsHandler(w http.ResponseWriter, r *http.Request) {
 	resp := ScoreItemsResponse{
 		Scores: scores,
 	}
+	slog.Debug(
+		"scoreItems response",
+		"item_ids", req.ItemIDs,
+		"status_code", http.StatusOK,
+		"response", resp,
+	)
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
@@ -119,21 +151,29 @@ func ScoreItemsHandler(w http.ResponseWriter, r *http.Request) {
 // Иногда может вернуть случайную ошибку, чтобы pipeline мог отрабатывать
 // retry и non-retryable сценарии.
 func LogItemsHandler(w http.ResponseWriter, r *http.Request) {
-	if MaybeWriteRandomError(w) {
-		return
-	}
-
 	var req ItemIDsRequest
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	slog.Debug(
+		"logItems request",
+		"item_ids", req.ItemIDs,
+	)
+	if MaybeWriteRandomError(w) {
+		return
+	}
 
 	resp := LogItemsResponse{
 		Logged: true,
 	}
-
+	slog.Debug(
+		"logItems response",
+		"item_ids", req.ItemIDs,
+		"status_code", http.StatusOK,
+		"response", resp,
+	)
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		http.Error(

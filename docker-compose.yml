@@ -1,0 +1,18 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: urls_etl_postgres
+    environment:
+      POSTGRES_DB: urls_etl
+      POSTGRES_USER: urls_etl
+      POSTGRES_PASSWORD: urls_etl
+    ports:
+      - "5432:5432"
+    volumes:
+      - urls_etl_pg_data:/var/lib/postgresql/data
+
+    mem_limit: 512m
+    cpus: 0.5
+
+volumes:
+  urls_etl_pg_data:

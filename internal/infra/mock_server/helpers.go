@@ -3,6 +3,7 @@ package mock_server
 import (
 	"encoding/json"
 	"log"
+	"log/slog"
 	"math/rand"
 	"net/http"
 )
@@ -43,6 +44,11 @@ func MaybeWriteRandomError(w http.ResponseWriter) bool {
 // - статус-код;
 // - признак retryable.
 func writeErrorResponse(w http.ResponseWriter, status int) {
+	slog.Debug(
+		"mock server returns error",
+		"status_code", status,
+		"retryable", isRetryableStatus(status),
+	)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 

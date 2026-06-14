@@ -2,37 +2,147 @@ package domain
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
+	"log/slog"
+	"time"
 )
 
 type Requester interface {
 	Do(
 		ctx context.Context,
-		req RequestData,
+		pipelineData PipelineData,
 	) ResponseData
 }
 
-// RequestWorker читает запросы из reqCh и выполняет их через requester.
+// RequestWorker обрабатывает задачи отправления запросов на сторонний сервис
 //
-// Worker завершает работу после закрытия reqCh.
-// Ошибочные запросы пока только логируются.
-// Позже здесь можно добавить сохранение ошибок в БД
-// или отправку задач в retry/dead-letter pipeline.
-func RequestWorker(workerId int, reqCh <-chan RequestData, requester Requester) {
-	for req := range reqCh {
-		fmt.Printf("[worker %d] started request to %s\n", workerId, req.URL)
-		resp := requester.Do(context.Background(), req)
+// Для каждой входящей задачи worker:
+//   - выполняет запрос к стороннему сервису;
+//   - сохраняет результат выполнения этапа в БД;
+//   - логирует успешное или ошибочное выполнение.
+//
+// Worker завершает работу после закрытия входного канала.
+//
+// В дальнейшем здесь появится передача результата в выходной канал для обработки следующий стадий
+func RequestWorker(
+	ctx context.Context,
+	workerID int,
+	reqCh <-chan PipelineData,
+	requester Requester,
+	repo PipelineRepository,
+) {
+	for pipelineData := range reqCh {
+		slog.Info(
+			"request worker started",
+			"worker_id", workerID,
+			"pipeline_id", pipelineData.PipelineID,
+			"task_id", pipelineData.TaskID,
+			"url", pipelineData.Request.URL,
+		)
+
+		resp := requester.Do(ctx, pipelineData)
+
 		if resp.Err != nil {
-			fmt.Printf("[worker %d] failed request to %s: %v\n", workerId, req.URL, resp.Err)
-			// TODO нужно заносить в БД
+			slog.Error(
+				"request worker failed",
+				"worker_id", workerID,
+				"pipeline_id", pipelineData.PipelineID,
+				"task_id", pipelineData.TaskID,
+				"url", pipelineData.Request.URL,
+				"status_code", resp.StatusCode,
+				"err", resp.Err,
+			)
+
+			if err := saveToDB(ctx, repo, pipelineData, resp, StatusFailed); err != nil {
+				slog.Error(
+					"failed to save get_items stage result",
+					"worker_id", workerID,
+					"pipeline_id", pipelineData.PipelineID,
+					"task_id", pipelineData.TaskID,
+					"url", pipelineData.Request.URL,
+					"err", err,
+				)
+			}
+
 			continue
 		}
-		fmt.Printf(
-			"[worker %d] finished request to %s with status %d\n",
-			workerId,
-			resp.URL,
-			resp.StatusCode,
+
+		slog.Info(
+			"request worker finished",
+			"worker_id", workerID,
+			"pipeline_id", pipelineData.PipelineID,
+			"task_id", pipelineData.TaskID,
+			"url", resp.URL,
+			"status_code", resp.StatusCode,
 		)
-		// TODO будем передавать response дальше в какой-то канал
+
+		if err := saveToDB(ctx, repo, pipelineData, resp, StatusSuccess); err != nil {
+			slog.Error(
+				"failed to save get_items stage result",
+				"worker_id", workerID,
+				"pipeline_id", pipelineData.PipelineID,
+				"task_id", pipelineData.TaskID,
+				"url", pipelineData.Request.URL,
+				"err", err,
+			)
+		}
+
+		// TODO: дальше будем парсить resp.Body и передавать item_ids в следующий stage.
 	}
+}
+
+func saveToDB(
+	ctx context.Context,
+	repo PipelineRepository,
+	pipelineData PipelineData,
+	resp ResponseData,
+	status string,
+) error {
+	details := map[string]any{
+		"request": map[string]any{
+			"url":     pipelineData.Request.URL,
+			"headers": pipelineData.Request.Headers,
+			"payload": pipelineData.Request.Payload,
+		},
+		"response": map[string]any{
+			"url":         resp.URL,
+			"status_code": resp.StatusCode,
+			"body":        resp.Body,
+		},
+	}
+
+	if resp.Err != nil {
+		details["error"] = resp.Err.Error()
+	}
+
+	detailsJSON, err := json.Marshal(details)
+	if err != nil {
+		return err
+	}
+
+	stageResult := StageResult{
+		TaskID:  pipelineData.TaskID,
+		Stage:   StageGetItems, // todo в дальнейшем предусмотреть динамическое подставление stage
+		Status:  status,
+		Attempt: 1,
+		Details: detailsJSON,
+	}
+
+	err = repo.SaveStageResult(ctx, stageResult)
+	if err == nil {
+		return nil
+	}
+
+	if !IsRetryable(err) {
+		return err
+	}
+
+	time.Sleep(300 * time.Millisecond)
+
+	err = repo.SaveStageResult(ctx, stageResult)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
