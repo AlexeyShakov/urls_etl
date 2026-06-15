@@ -7,40 +7,49 @@ import (
 )
 
 func RunPipeline(ctx context.Context, urls []RequestData, ch chan<- PipelineData, repo PipelineRepository) {
+	defer close(ch)
+
 	pipelineID, err := savePipeline(ctx, repo)
 	if err != nil {
 		slog.Error(SavingPipeFail, "err", err)
+
 		if IsRetryable(err) {
 			pipelineID, err = savePipeline(ctx, repo)
 			if err != nil {
 				slog.Error(RepeatingSavingPipeFail, "err", err)
 				return
 			}
+		} else {
+			slog.Error(DBUnavailableNonRetryableSavingPipe, "err", err)
+			return
 		}
-		slog.Error(DBUnavailableNonRetryableSavingPipe, "err", err)
-		return
 	}
+
 	for _, req := range urls {
+		//todo можно вынести сохранение таски в воркер, тогда мы сможем распарралелить это действие. Сейчас сохранение
+		//тасок происходит синхронно
 		taskID, err := saveTask(ctx, repo, req, pipelineID)
 		if err != nil {
 			slog.Error(SavingTaskFail, "pipeline_id", pipelineID, "url", req.URL, "err", err)
+
 			if IsRetryable(err) {
 				taskID, err = saveTask(ctx, repo, req, pipelineID)
 				if err != nil {
 					slog.Error(RepeatingSavingTaskFail, "pipeline_id", pipelineID, "url", req.URL, "err", err)
 					continue
 				}
+			} else {
+				slog.Error(DBUnavailableNonRetryableSavingTask, "pipeline_id", pipelineID, "url", req.URL, "err", err)
+				continue
 			}
-			slog.Error(DBUnavailableNonRetryableSavingTask, "pipeline_id", pipelineID, "url", req.URL, "err", err)
-			continue
 		}
+
 		ch <- PipelineData{
+			PipelineID: pipelineID,
 			TaskID:     taskID,
 			Request:    req,
-			PipelineID: pipelineID,
 		}
 	}
-	close(ch)
 }
 
 func savePipeline(ctx context.Context, repo PipelineRepository) (int64, error) {

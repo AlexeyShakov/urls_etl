@@ -5,8 +5,6 @@ import (
 	"time"
 )
 
-//todo нужно отрефакторить файл и возможно всю директорию, разнести все на под-директории
-
 type Pipeline struct {
 	ID         int64
 	Status     string
