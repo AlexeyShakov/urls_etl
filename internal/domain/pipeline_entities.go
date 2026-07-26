@@ -7,7 +7,7 @@ import (
 
 type Pipeline struct {
 	ID         int64
-	Status     string
+	Status     Status
 	CreatedAt  time.Time
 	FinishedAt *time.Time
 	UpdatedAt  time.Time
@@ -18,7 +18,7 @@ type PipelineTask struct {
 	PipelineID int64
 	SourceURL  string
 	Details    json.RawMessage
-	Status     string
+	Status     Status
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
 }
@@ -26,8 +26,8 @@ type PipelineTask struct {
 type StageResult struct {
 	ID        int64
 	TaskID    int64
-	Stage     string
-	Status    string
+	Stage     Stage
+	Status    Status
 	Attempt   int
 	Details   json.RawMessage
 	CreatedAt time.Time
@@ -39,8 +39,15 @@ type RequestDetails struct {
 	Headers map[string]string
 }
 
+// todo может получиться как-то получше назвать?
 type PipelineData struct {
 	TaskID     int64
 	PipelineID int64
 	Request    RequestData
+	Stage      Stage
+}
+
+type RequestResult struct {
+	PipelineData PipelineData
+	Response     ResponseData
 }

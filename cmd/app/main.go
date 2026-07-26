@@ -33,17 +33,20 @@ func main() {
 	workerCfg := config.NewDefaultWorkersConfig()
 	httpCfg := config.NewDefaultHTTPConfig()
 
-	// Канал, куда кладется информация о внешних запросах. На схеме это next_channel
+	// Канал, куда кладется информация о внешних запросах.
 	requestChannel := make(chan domain.PipelineData, workerCfg.RequestChannelLen)
-	// Каналы, куда складываются данные для запроса. На схеме это  in channel
+	// Каналы, куда складываются данные для запроса.
 	firstWorkerCh := make(chan domain.PipelineData, workerCfg.WorkerChannelLen)
 	secondWorkerCh := make(chan domain.PipelineData, workerCfg.WorkerChannelLen)
+	// Канал для обработки результатов от http воркера
+	stageResultCh := make(chan domain.RequestResult, workerCfg.WorkerChannelLen)
 
 	client := infra_http.NewHTTPClient(httpCfg)
 	httpRequester := infra_http.NewHttpRequester(client, httpCfg)
+	ctx := context.Background()
 
 	dbConfig := config.NewDBConfig()
-	dbConnection, err := postgresql.NewConnection(context.Background(), dbConfig)
+	dbConnection, err := postgresql.NewConnection(ctx, dbConfig)
 	if err != nil {
 		log.Fatalf("No connection to db: %s", err)
 	}
@@ -56,19 +59,25 @@ func main() {
 		defer wg.Done()
 		domain.DispatchRequests(requestChannel, firstWorkerCh, secondWorkerCh)
 	}()
+
 	// TODO можно ли передачу каналов и кол-во воркеров сделать динамически?
 	wg.Add(2)
-	ctx := context.Background()
 	go func() {
 		defer wg.Done()
-		domain.RequestWorker(ctx, 1, firstWorkerCh, httpRequester, repo)
+		domain.RequestWorker(ctx, 1, firstWorkerCh, httpRequester, stageResultCh)
 	}()
 
 	go func() {
 		defer wg.Done()
-		domain.RequestWorker(ctx, 2, secondWorkerCh, httpRequester, repo)
+		domain.RequestWorker(ctx, 2, secondWorkerCh, httpRequester, stageResultCh)
 	}()
 
-	domain.RunPipeline(context.Background(), urls, requestChannel, repo)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		domain.HandleStageResult(ctx, repo, stageResultCh)
+	}()
+
+	domain.RunPipeline(ctx, urls, requestChannel, repo)
 	wg.Wait()
 }

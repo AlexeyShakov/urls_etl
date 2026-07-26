@@ -1,16 +1,20 @@
 package domain
 
-const (
-	StageGetItems   string = "get_items"
-	StageFillItems  string = "fill_items"
-	StageScoreItems string = "score_items"
-	StageLogItems   string = "log_items"
-	StageSaveResult string = "save_result"
-)
+type Stage string
 
 const (
-	StatusPending    string = "pending"
-	StatusProcessing string = "processing"
-	StatusSuccess    string = "success"
-	StatusFailed     string = "failed"
+	StageGetItems   Stage = "get_items"
+	StageFillItems  Stage = "fill_items"
+	StageScoreItems Stage = "score_items"
+	StageLogItems   Stage = "log_items"
+	StageSaveResult Stage = "save_result"
+)
+
+type Status string
+
+const (
+	StatusPending    Status = "pending"
+	StatusProcessing Status = "processing"
+	StatusSuccess    Status = "success"
+	StatusFailed     Status = "failed"
 )

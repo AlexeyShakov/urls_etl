@@ -48,6 +48,7 @@ func RunPipeline(ctx context.Context, urls []RequestData, ch chan<- PipelineData
 			PipelineID: pipelineID,
 			TaskID:     taskID,
 			Request:    req,
+			Stage:      StageGetItems,
 		}
 	}
 }
