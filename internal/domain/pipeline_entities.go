@@ -51,3 +51,7 @@ type RequestResult struct {
 	PipelineData PipelineData
 	Response     ResponseData
 }
+
+type ItemsRequestPayload struct {
+	ItemIDs []int64 `json:"item_ids"`
+}

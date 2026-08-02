@@ -52,6 +52,12 @@ func main() {
 	}
 	repo := postgresql.NewRepo(dbConnection)
 
+	requestBuilders := []domain.ItemsRequestBuilder{
+		domain.BuildFillItemsRequest,
+		domain.BuildScoreItemsRequest,
+		domain.BuildLogItemsRequest,
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(1)
 
@@ -75,7 +81,13 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		domain.HandleStageResult(ctx, repo, stageResultCh)
+		domain.HandleStageResult(
+			ctx,
+			repo,
+			stageResultCh,
+			requestChannel,
+			requestBuilders,
+		)
 	}()
 
 	domain.RunPipeline(ctx, urls, requestChannel, repo)

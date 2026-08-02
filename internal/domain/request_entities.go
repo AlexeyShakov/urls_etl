@@ -12,3 +12,7 @@ type ResponseData struct {
 	Body       string
 	Err        error
 }
+
+type GetItemsResponse struct {
+	ItemIDs []int64 `json:"item_ids"`
+}

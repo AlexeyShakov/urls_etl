@@ -3,14 +3,20 @@ package domain
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"time"
 )
 
+// HandleStageResult сохраняет результаты выполненных стадий и после успешного
+// сохранения передает их на маршрутизацию к следующим стадиям.
 func HandleStageResult(
 	ctx context.Context,
 	repo PipelineRepository,
 	resultCh <-chan RequestResult,
+	requestCh chan<- PipelineData,
+	builders []ItemsRequestBuilder,
+
 ) {
 	for result := range resultCh {
 		status := defineStageStatus(result.Response)
@@ -32,7 +38,18 @@ func HandleStageResult(
 			"stage", result.PipelineData.Stage,
 			"status", status,
 		)
-		// TODO: route successfully persisted results according to their stage.
+		if status != StatusSuccess {
+			continue
+		}
+		if err := routeStageResult(ctx, result, requestCh, builders); err != nil {
+			slog.Error(
+				"failed to route stage result",
+				"pipeline_id", result.PipelineData.PipelineID,
+				"task_id", result.PipelineData.TaskID,
+				"stage", result.PipelineData.Stage,
+				"err", err,
+			)
+		}
 	}
 }
 
@@ -117,4 +134,87 @@ func waitBeforeRetry(ctx context.Context, delay time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+// parseGetItemsResponse извлекает идентификаторы товаров из ответа GetItems.
+func parseGetItemsResponse(response ResponseData) (GetItemsResponse, error) {
+	var getItemsResponse GetItemsResponse
+
+	if err := json.Unmarshal(
+		[]byte(response.Body),
+		&getItemsResponse,
+	); err != nil {
+		return GetItemsResponse{}, err
+	}
+
+	return getItemsResponse, nil
+}
+
+// routeStageResult определяет дальнейшую обработку результата в зависимости
+// от завершенной стадии и останавливает маршрут для конечных стадий.
+func routeStageResult(
+	ctx context.Context,
+	result RequestResult,
+	requestCh chan<- PipelineData,
+	builders []ItemsRequestBuilder,
+) error {
+	switch result.PipelineData.Stage {
+	case StageGetItems:
+		response, err := parseGetItemsResponse(result.Response)
+		if err != nil {
+			return err
+		}
+
+		if len(response.ItemIDs) == 0 {
+			return nil
+		}
+
+		return fanOutGetItemsResult(
+			ctx,
+			result.PipelineData,
+			response.ItemIDs,
+			requestCh,
+			builders,
+		)
+	// Это "конечные" стадии, после них никаких других действий нет
+	case StageFillItems, StageScoreItems, StageLogItems:
+		return nil
+
+	default:
+		return fmt.Errorf(
+			"unsupported stage: %s",
+			result.PipelineData.Stage,
+		)
+	}
+}
+
+// fanOutGetItemsResult формирует задачи для всех следующих стадий и отправляет
+// их в общий канал только после успешного построения каждого запроса.
+func fanOutGetItemsResult(
+	ctx context.Context,
+	data PipelineData,
+	itemIDs []int64,
+	requestCh chan<- PipelineData,
+	builders []ItemsRequestBuilder,
+) error {
+	requests := make([]PipelineData, 0, len(builders))
+
+	for _, buildRequest := range builders {
+		requestData, err := buildRequest(data, itemIDs)
+		if err != nil {
+			return err
+		}
+
+		requests = append(requests, requestData)
+	}
+
+	for _, requestData := range requests {
+		select {
+		case requestCh <- requestData:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	return nil
 }
