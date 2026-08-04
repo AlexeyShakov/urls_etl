@@ -7,7 +7,7 @@ import (
 
 type Pipeline struct {
 	ID         int64
-	Status     Status
+	Status     PipelineStatus
 	CreatedAt  time.Time
 	FinishedAt *time.Time
 	UpdatedAt  time.Time
@@ -18,7 +18,7 @@ type PipelineTask struct {
 	PipelineID int64
 	SourceURL  string
 	Details    json.RawMessage
-	Status     Status
+	Status     TaskStatus
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
 }
@@ -27,7 +27,7 @@ type StageResult struct {
 	ID        int64
 	TaskID    int64
 	Stage     Stage
-	Status    Status
+	Status    TaskStatus
 	Attempt   int
 	Details   json.RawMessage
 	CreatedAt time.Time

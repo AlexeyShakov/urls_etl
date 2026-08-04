@@ -90,8 +90,8 @@ func TestWholePipelineSuccess(t *testing.T) {
 			t.Fatalf("expected stage %q, got %q", StageGetItems, result.Stage)
 		}
 
-		if result.Status != StatusSuccess {
-			t.Fatalf("expected status %q, got %q", StatusSuccess, result.Status)
+		if result.Status != TaskStatusSuccess {
+			t.Fatalf("expected status %q, got %q", TaskStatusSuccess, result.Status)
 		}
 
 		if result.Attempt != 1 {
@@ -250,8 +250,8 @@ func TestWholePipeline_SavePipelineRetrySuccess(t *testing.T) {
 			t.Fatalf("expected stage %q, got %q", StageGetItems, result.Stage)
 		}
 
-		if result.Status != StatusSuccess {
-			t.Fatalf("expected status %q, got %q", StatusSuccess, result.Status)
+		if result.Status != TaskStatusSuccess {
+			t.Fatalf("expected status %q, got %q", TaskStatusSuccess, result.Status)
 		}
 	}
 }
@@ -420,8 +420,8 @@ func TestWholePipeline_SaveTaskRetrySuccess(t *testing.T) {
 			t.Fatalf("expected stage %q, got %q", StageGetItems, result.Stage)
 		}
 
-		if result.Status != StatusSuccess {
-			t.Fatalf("expected status %q, got %q", StatusSuccess, result.Status)
+		if result.Status != TaskStatusSuccess {
+			t.Fatalf("expected status %q, got %q", TaskStatusSuccess, result.Status)
 		}
 
 		if result.Attempt != 1 {
@@ -516,8 +516,8 @@ func TestWholePipeline_RequestFailedStageResultSaved(t *testing.T) {
 			t.Fatalf("expected stage %q, got %q", StageGetItems, result.Stage)
 		}
 
-		if result.Status != StatusFailed {
-			t.Fatalf("expected status %q, got %q", StatusFailed, result.Status)
+		if result.Status != TaskStatusFailed {
+			t.Fatalf("expected status %q, got %q", TaskStatusFailed, result.Status)
 		}
 
 		if result.Attempt != 1 {
@@ -643,8 +643,8 @@ func TestWholePipeline_RequestFailedStageResultRetrySuccess(t *testing.T) {
 		t.Fatalf("expected stage %q, got %q", StageGetItems, result.Stage)
 	}
 
-	if result.Status != StatusFailed {
-		t.Fatalf("expected status %q, got %q", StatusFailed, result.Status)
+	if result.Status != TaskStatusFailed {
+		t.Fatalf("expected status %q, got %q", TaskStatusFailed, result.Status)
 	}
 
 	if result.Attempt != 1 {

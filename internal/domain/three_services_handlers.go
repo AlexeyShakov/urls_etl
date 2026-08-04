@@ -20,7 +20,7 @@ func BuildFillItemsRequest(
 	)
 }
 
-// buildScoreItemsRequest формирует запрос для стадии ScoreItems.
+// BuildScoreItemsRequest формирует запрос для стадии ScoreItems.
 func BuildScoreItemsRequest(
 	data PipelineData,
 	itemIDs []int64,

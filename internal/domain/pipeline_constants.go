@@ -7,14 +7,21 @@ const (
 	StageFillItems  Stage = "fill_items"
 	StageScoreItems Stage = "score_items"
 	StageLogItems   Stage = "log_items"
-	StageSaveResult Stage = "save_result"
 )
 
-type Status string
+type TaskStatus string
 
 const (
-	StatusPending    Status = "pending"
-	StatusProcessing Status = "processing"
-	StatusSuccess    Status = "success"
-	StatusFailed     Status = "failed"
+	TaskStatusProcessing TaskStatus = "processing"
+	TaskStatusSuccess    TaskStatus = "success"
+	TaskStatusFailed     TaskStatus = "failed"
+)
+
+type PipelineStatus string
+
+const (
+	PipelineStatusPending    PipelineStatus = "pending"
+	PipelineStatusProcessing PipelineStatus = "processing"
+	PipelineStatusFinished   PipelineStatus = "finished"
+	PipelineStatusStopped    PipelineStatus = "stopped"
 )

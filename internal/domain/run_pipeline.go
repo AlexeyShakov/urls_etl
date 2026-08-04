@@ -55,7 +55,7 @@ func RunPipeline(ctx context.Context, urls []RequestData, ch chan<- PipelineData
 
 func savePipeline(ctx context.Context, repo PipelineRepository) (int64, error) {
 	pipelineID, err := repo.SavePipeline(ctx, Pipeline{
-		Status:     StatusProcessing,
+		Status:     PipelineStatusProcessing,
 		FinishedAt: nil,
 	})
 	return pipelineID, err
@@ -79,7 +79,7 @@ func saveTask(
 			PipelineID: pipelineID,
 			SourceURL:  request.URL,
 			Details:    detailsJSON,
-			Status:     StatusProcessing,
+			Status:     TaskStatusProcessing,
 		},
 	)
 
