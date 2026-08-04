@@ -38,7 +38,7 @@ func HandleStageResult(
 			"stage", result.PipelineData.Stage,
 			"status", status,
 		)
-		if status != TaskStatusSuccess {
+		if status != StageStatusSuccess {
 			continue
 		}
 		if err := routeStageResult(ctx, result, requestCh, builders); err != nil {
@@ -54,11 +54,11 @@ func HandleStageResult(
 }
 
 // defineStageStatus определяет статус стадии по результату HTTP-запроса.
-func defineStageStatus(response ResponseData) TaskStatus {
+func defineStageStatus(response ResponseData) StageStatus {
 	if response.Err != nil {
-		return TaskStatusFailed
+		return StageStatusFail
 	}
-	return TaskStatusSuccess
+	return StageStatusSuccess
 }
 
 // saveStageResult сохраняет результат выполнения стадии с повторной попыткой при временной ошибке.
@@ -66,7 +66,7 @@ func saveStageResult(
 	ctx context.Context,
 	repo PipelineRepository,
 	result RequestResult,
-	status TaskStatus,
+	status StageStatus,
 ) error {
 	stageResult, err := buildStageResult(result, status)
 	if err != nil {
@@ -87,7 +87,7 @@ func saveStageResult(
 // buildStageResult формирует объект StageResult для сохранения в БД.
 func buildStageResult(
 	result RequestResult,
-	status TaskStatus,
+	status StageStatus,
 ) (StageResult, error) {
 	pipelineData := result.PipelineData
 	response := result.Response

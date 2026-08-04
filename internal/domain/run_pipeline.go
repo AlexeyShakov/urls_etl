@@ -51,6 +51,23 @@ func RunPipeline(ctx context.Context, urls []RequestData, ch chan<- PipelineData
 			Stage:      StageGetItems,
 		}
 	}
+	if err := repo.UpdatePipelineTaskStatuses(ctx, pipelineID); err != nil {
+		slog.Error(
+			"failed to update pipeline task statuses",
+			"pipeline_id", pipelineID,
+			"err", err,
+		)
+		return
+	}
+	if err := repo.UpdatePipelineStatus(ctx, PipelineStatusFinished, pipelineID); err != nil {
+		slog.Error(
+			"failed to update pipeline task statuses",
+			"pipeline_id", pipelineID,
+			"err", err,
+		)
+		return
+	}
+
 }
 
 func savePipeline(ctx context.Context, repo PipelineRepository) (int64, error) {

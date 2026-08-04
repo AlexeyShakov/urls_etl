@@ -25,3 +25,10 @@ const (
 	PipelineStatusFinished   PipelineStatus = "finished"
 	PipelineStatusStopped    PipelineStatus = "stopped"
 )
+
+type StageStatus string
+
+const (
+	StageStatusSuccess StageStatus = "success"
+	StageStatusFail    StageStatus = "failed"
+)

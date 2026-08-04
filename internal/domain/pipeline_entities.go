@@ -27,7 +27,7 @@ type StageResult struct {
 	ID        int64
 	TaskID    int64
 	Stage     Stage
-	Status    TaskStatus
+	Status    StageStatus
 	Attempt   int
 	Details   json.RawMessage
 	CreatedAt time.Time
