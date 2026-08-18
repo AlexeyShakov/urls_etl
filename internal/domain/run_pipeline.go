@@ -6,9 +6,19 @@ import (
 	"log/slog"
 )
 
-func RunPipeline(ctx context.Context, urls []RequestData, ch chan<- PipelineData, repo PipelineRepository) {
-	defer close(ch)
-
+// RunPipeline:
+// 1. создает Pipeline и PipelineTask;
+// 2. отправляет начальные GetItems задачи;
+// 3. ждет завершения всех созданных задач через coordinator;
+// 4. закрывает requestChannel;
+// 5. финализирует статусы.
+func RunPipeline(
+	ctx context.Context,
+	urls []RequestData,
+	ch chan<- PipelineData,
+	repo PipelineRepository,
+	pipelineCoordinator IPipelineCoordinator,
+) {
 	pipelineID, err := savePipeline(ctx, repo)
 	if err != nil {
 		slog.Error(SavingPipeFail, "err", err)
@@ -43,7 +53,7 @@ func RunPipeline(ctx context.Context, urls []RequestData, ch chan<- PipelineData
 				continue
 			}
 		}
-
+		pipelineCoordinator.Add(1)
 		ch <- PipelineData{
 			PipelineID: pipelineID,
 			TaskID:     taskID,
@@ -51,6 +61,11 @@ func RunPipeline(ctx context.Context, urls []RequestData, ch chan<- PipelineData
 			Stage:      StageGetItems,
 		}
 	}
+	pipelineCoordinator.FinishInitialUrlsSubmission()
+	// Ждем завершения всех задач пайплайна.
+	pipelineCoordinator.Wait()
+	// Новых запросов больше не будет, поэтому канал можно безопасно закрыть.
+	close(ch)
 	if err := repo.UpdatePipelineTaskStatuses(ctx, pipelineID); err != nil {
 		slog.Error(
 			"failed to update pipeline task statuses",

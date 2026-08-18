@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"sync"
+
 	"urls_etl/internal/config"
 	"urls_etl/internal/domain"
 	"urls_etl/internal/infra/db/postgresql"
@@ -30,26 +31,42 @@ var urls = []domain.RequestData{
 }
 
 func main() {
+	ctx := context.Background()
+
 	workerCfg := config.NewDefaultWorkersConfig()
 	httpCfg := config.NewDefaultHTTPConfig()
 
-	// Канал, куда кладется информация о внешних запросах.
-	requestChannel := make(chan domain.PipelineData, workerCfg.RequestChannelLen)
-	// Каналы, куда складываются данные для запроса.
-	firstWorkerCh := make(chan domain.PipelineData, workerCfg.WorkerChannelLen)
-	secondWorkerCh := make(chan domain.PipelineData, workerCfg.WorkerChannelLen)
-	// Канал для обработки результатов от http воркера
-	stageResultCh := make(chan domain.RequestResult, workerCfg.WorkerChannelLen)
+	// Общий канал задач для выполнения HTTP-запросов.
+	requestChannel := make(
+		chan domain.PipelineData,
+		workerCfg.RequestChannelLen,
+	)
+
+	// Входные каналы HTTP-воркеров.
+	firstWorkerCh := make(
+		chan domain.PipelineData,
+		workerCfg.WorkerChannelLen,
+	)
+	secondWorkerCh := make(
+		chan domain.PipelineData,
+		workerCfg.WorkerChannelLen,
+	)
+
+	// Канал результатов HTTP-запросов.
+	stageResultCh := make(
+		chan domain.RequestResult,
+		workerCfg.WorkerChannelLen,
+	)
 
 	client := infra_http.NewHTTPClient(httpCfg)
 	httpRequester := infra_http.NewHttpRequester(client, httpCfg)
-	ctx := context.Background()
 
 	dbConfig := config.NewDBConfig()
 	dbConnection, err := postgresql.NewConnection(ctx, dbConfig)
 	if err != nil {
-		log.Fatalf("No connection to db: %s", err)
+		log.Fatalf("no connection to db: %s", err)
 	}
+
 	repo := postgresql.NewRepo(dbConnection)
 
 	requestBuilders := []domain.ItemsRequestBuilder{
@@ -58,38 +75,90 @@ func main() {
 		domain.BuildLogItemsRequest,
 	}
 
+	pipelineCoordinator := domain.NewPipelineCoordinator()
+
 	var wg sync.WaitGroup
-	wg.Add(1)
 
+	// Отдельный WaitGroup нужен только для HTTP-воркеров.
+	//
+	// Все HTTP-воркеры являются producer-ами общего stageResultCh.
+	// Поэтому ни один отдельный worker не может безопасно закрыть этот канал.
+	// stageResultCh можно закрыть только после завершения ВСЕХ RequestWorker.
+	var requestWorkersWG sync.WaitGroup
+
+	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		domain.DispatchRequests(requestChannel, firstWorkerCh, secondWorkerCh)
+
+		domain.DispatchRequests(
+			requestChannel,
+			firstWorkerCh,
+			secondWorkerCh,
+		)
 	}()
 
-	// TODO можно ли передачу каналов и кол-во воркеров сделать динамически?
+	// TODO: Сделать количество worker-ов и их каналы динамическими.
+	requestWorkersWG.Add(2)
 	wg.Add(2)
+
 	go func() {
 		defer wg.Done()
-		domain.RequestWorker(ctx, 1, firstWorkerCh, httpRequester, stageResultCh)
+		defer requestWorkersWG.Done()
+
+		domain.RequestWorker(
+			ctx,
+			1,
+			firstWorkerCh,
+			httpRequester,
+			stageResultCh,
+		)
 	}()
 
 	go func() {
 		defer wg.Done()
-		domain.RequestWorker(ctx, 2, secondWorkerCh, httpRequester, stageResultCh)
+		defer requestWorkersWG.Done()
+
+		domain.RequestWorker(
+			ctx,
+			2,
+			secondWorkerCh,
+			httpRequester,
+			stageResultCh,
+		)
+	}()
+
+	// Закрываем stageResultCh только после завершения всех его producer-ов.
+	//
+	// Этот goroutine не добавляется в основной wg, потому что его задача —
+	// только дождаться RequestWorker и закрыть канал. После закрытия канала
+	// HandleStageResult завершит свой range и основной wg дождется его.
+	go func() {
+		requestWorkersWG.Wait()
+		close(stageResultCh)
 	}()
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+
 		domain.HandleStageResult(
 			ctx,
 			repo,
 			stageResultCh,
 			requestChannel,
 			requestBuilders,
+			pipelineCoordinator,
 		)
 	}()
 
-	domain.RunPipeline(ctx, urls, requestChannel, repo)
+	domain.RunPipeline(
+		ctx,
+		urls,
+		requestChannel,
+		repo,
+		pipelineCoordinator,
+	)
+
+	// Ждем завершения Dispatcher, RequestWorker и HandleStageResult.
 	wg.Wait()
 }

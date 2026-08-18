@@ -135,7 +135,7 @@ func (p *PipelineRepo) UpdatePipelineStatus(
 	pipelineID int64,
 ) error {
 	query := `
-		UPDATE pipeline_tasks 
+		UPDATE pipelines 
 		SET status = $1
 		WHERE pipeline_tasks.id = $2
 	`

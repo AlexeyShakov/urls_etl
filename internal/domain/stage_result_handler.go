@@ -8,48 +8,68 @@ import (
 	"time"
 )
 
-// HandleStageResult сохраняет результаты выполненных стадий и после успешного
-// сохранения передает их на маршрутизацию к следующим стадиям.
 func HandleStageResult(
 	ctx context.Context,
 	repo PipelineRepository,
 	resultCh <-chan RequestResult,
 	requestCh chan<- PipelineData,
 	builders []ItemsRequestBuilder,
-
+	pipelineCoordinator IPipelineCoordinator,
 ) {
 	for result := range resultCh {
-		status := defineStageStatus(result.Response)
-		if err := saveStageResult(ctx, repo, result, status); err != nil {
-			slog.Error(
-				"failed to save stage result",
-				"pipeline_id", result.PipelineData.PipelineID,
-				"task_id", result.PipelineData.TaskID,
-				"stage", result.PipelineData.Stage,
-				"status", status,
-				"err", err,
-			)
-			continue
-		}
-		slog.Info(
-			"stage result saved",
+		handleOneStageResult(
+			ctx,
+			repo,
+			result,
+			requestCh,
+			builders,
+			pipelineCoordinator,
+		)
+		// Текущая задача полностью обработана независимо от результата.
+		pipelineCoordinator.Done()
+	}
+}
+
+// handleOneStageResult сохраняет результаты выполненных стадий и после успешного
+// сохранения передает их на маршрутизацию к следующим стадиям.
+func handleOneStageResult(
+	ctx context.Context,
+	repo PipelineRepository,
+	result RequestResult,
+	requestCh chan<- PipelineData,
+	builders []ItemsRequestBuilder,
+	pipelineCoordinator IPipelineCoordinator,
+) {
+	status := defineStageStatus(result.Response)
+	if err := saveStageResult(ctx, repo, result, status); err != nil {
+		slog.Error(
+			"failed to save stage result",
 			"pipeline_id", result.PipelineData.PipelineID,
 			"task_id", result.PipelineData.TaskID,
 			"stage", result.PipelineData.Stage,
 			"status", status,
+			"err", err,
 		)
-		if status != StageStatusSuccess {
-			continue
-		}
-		if err := routeStageResult(ctx, result, requestCh, builders); err != nil {
-			slog.Error(
-				"failed to route stage result",
-				"pipeline_id", result.PipelineData.PipelineID,
-				"task_id", result.PipelineData.TaskID,
-				"stage", result.PipelineData.Stage,
-				"err", err,
-			)
-		}
+		return
+	}
+	slog.Info(
+		"stage result saved",
+		"pipeline_id", result.PipelineData.PipelineID,
+		"task_id", result.PipelineData.TaskID,
+		"stage", result.PipelineData.Stage,
+		"status", status,
+	)
+	if status != StageStatusSuccess {
+		return
+	}
+	if err := routeStageResult(ctx, result, requestCh, builders, pipelineCoordinator); err != nil {
+		slog.Error(
+			"failed to route stage result",
+			"pipeline_id", result.PipelineData.PipelineID,
+			"task_id", result.PipelineData.TaskID,
+			"stage", result.PipelineData.Stage,
+			"err", err,
+		)
 	}
 }
 
@@ -157,6 +177,7 @@ func routeStageResult(
 	result RequestResult,
 	requestCh chan<- PipelineData,
 	builders []ItemsRequestBuilder,
+	pipelineCoordinator IPipelineCoordinator,
 ) error {
 	switch result.PipelineData.Stage {
 	case StageGetItems:
@@ -175,9 +196,11 @@ func routeStageResult(
 			response.ItemIDs,
 			requestCh,
 			builders,
+			pipelineCoordinator,
 		)
 	// Это "конечные" стадии, после них никаких других действий нет
 	case StageFillItems, StageScoreItems, StageLogItems:
+		pipelineCoordinator.Done()
 		return nil
 
 	default:
@@ -196,6 +219,7 @@ func fanOutGetItemsResult(
 	itemIDs []int64,
 	requestCh chan<- PipelineData,
 	builders []ItemsRequestBuilder,
+	pipelineCoordinator IPipelineCoordinator,
 ) error {
 	requests := make([]PipelineData, 0, len(builders))
 
@@ -209,12 +233,16 @@ func fanOutGetItemsResult(
 	}
 
 	for _, requestData := range requests {
+		pipelineCoordinator.Add(1)
 		select {
 		case requestCh <- requestData:
 		case <-ctx.Done():
+			// Задача не была отправлена, поэтому возвращаем счетчик обратно.
+			pipelineCoordinator.Done()
 			return ctx.Err()
 		}
 	}
-
+	// это для задачи GetItems
+	pipelineCoordinator.Done()
 	return nil
 }
