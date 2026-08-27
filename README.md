@@ -136,21 +136,336 @@ service_3_url = 'http://service3/logItems/'
 
 ---
 
-# Предполагаемая архитектура
+<details>
+<summary><strong>Общая схема</strong></summary>
 
-![Architecture](./docs/architecture.png)
+![Architecture](docs/arch.png)
+
+### Основные компоненты
+
+#### RunPipeline
+
+`RunPipeline` запускает pipeline и отвечает за создание исходных задач.
+
+Для каждого URL:
+
+1. Создает `Pipeline` и `PipelineTask` в БД.
+2. Формирует `PipelineData` со стадией `GetItems`.
+3. Регистрирует новую задачу в `PipelineCoordinator`.
+4. Отправляет задачу в `requestChannel`.
+
+После отправки всех исходных URL вызывает `FinishInitialUrlsSubmission()` и ожидает завершения всех задач через `Wait()`.
+
+---
+
+#### requestChannel
+
+Общий канал для HTTP-задач всех стадий:
+
+- `GetItems`;
+- `FillItems`;
+- `ScoreItems`;
+- `LogItems`.
+
+В него могут писать несколько producer-ов:
+
+- `RunPipeline` — исходные `GetItems`;
+- `HandleStageResult` — новые задачи, появившиеся после обработки `GetItems`.
+
+Из канала задачи забирает `DispatchRequests`.
+
+---
+
+#### DispatchRequests
+
+Распределяет задачи из `requestChannel` между HTTP worker-ами.
 
 ```text
-Producer
-    ->
-URL Workers
-    ->
-Fan-Out
-    ->
-Service Workers
-    ->
-DB Saver
+requestChannel
+      |
+      v
+DispatchRequests
+   /       \
+  v         v
+workerCh1  workerCh2
 ```
+
+Таким образом, количество одновременно выполняющихся HTTP-запросов ограничивается количеством `RequestWorker`.
+
+---
+
+#### RequestWorker
+
+`RequestWorker` ничего не знает о бизнес-логике стадий и сохранении результатов в БД.
+
+Worker:
+
+1. Получает `PipelineData`.
+2. Выполняет HTTP-запрос.
+3. Формирует `RequestResult`.
+4. Передает результат в `stageResultCh`.
+
+```text
+PipelineData
+     |
+     v
+RequestWorker
+     |
+ HTTP request
+     |
+     v
+RequestResult
+     |
+     v
+stageResultCh
+```
+
+---
+
+#### stageResultCh
+
+Общий канал результатов HTTP-запросов.
+
+Несколько `RequestWorker` являются producer-ами этого канала, а `HandleStageResult` является consumer-ом.
+
+---
+
+#### HandleStageResult
+
+Отвечает за обработку результата завершенной стадии.
+
+Для каждого `RequestResult`:
+
+1. Определяет статус стадии.
+2. Сохраняет результат стадии в БД.
+3. Только после успешного сохранения решает, требуется ли дальнейшая обработка.
+
+Если HTTP-запрос завершился ошибкой или результат не удалось сохранить в БД, следующие стадии не запускаются.
+
+Для конечных стадий:
+
+```text
+FillItems
+ScoreItems
+LogItems
+```
+
+дальнейшая маршрутизация не требуется.
+
+---
+
+### Fan-out после GetItems
+
+`GetItems` возвращает список `item_ids`:
+
+```json
+{
+  "item_ids": [1, 2, 3]
+}
+```
+
+После успешного выполнения и сохранения `GetItems` результат используется для создания трех независимых задач:
+
+```text
+                   GetItems
+                      |
+                      v
+              HandleStageResult
+                /     |     \
+               /      |      \
+              v       v       v
+        FillItems  ScoreItems  LogItems
+```
+
+Для каждой стадии используется отдельный builder:
+
+- `BuildFillItemsRequest`;
+- `BuildScoreItemsRequest`;
+- `BuildLogItemsRequest`.
+
+Builder формирует новый `PipelineData` с нужным URL, payload и `Stage`.
+
+Полученные задачи снова отправляются в общий `requestChannel`, поэтому для выполнения всех HTTP-стадий используется один и тот же worker pool.
+
+---
+
+### PipelineCoordinator
+
+Pipeline имеет динамическое количество задач.
+
+Изначально существует одна задача `GetItems` на каждый URL, но после ее выполнения могут появиться еще три:
+
+```text
+GetItems
+   |
+   +-- FillItems
+   +-- ScoreItems
+   +-- LogItems
+```
+
+Поэтому завершение цикла по исходным URL еще не означает завершение pipeline.
+
+Для определения момента полного завершения используется `PipelineCoordinator`.
+
+Он хранит:
+
+- `counter` — количество зарегистрированных, но еще не завершенных задач;
+- `initialUrlsSubmissionFinished` — признак того, что все исходные URL уже отправлены.
+
+Основные операции:
+
+```text
+Add(n)                       зарегистрировать новые задачи
+Done()                       завершить одну задачу
+FinishInitialUrlsSubmission  исходные URL закончились
+Wait()                       дождаться полного завершения
+```
+
+Pipeline считается завершенным только когда одновременно выполняются условия:
+
+```text
+initialUrlsSubmissionFinished == true
+counter == 0
+```
+
+#### Регистрация задачи
+
+`Add()` должен выполняться **до публикации задачи в `requestChannel`**:
+
+Это гарантирует, что задача будет зарегистрирована до того, как другой goroutine сможет получить ее и вызвать `Done()`.
+
+После отправки всех исходных URL `RunPipeline` выполняет:
+
+```go
+pipelineCoordinator.FinishInitialUrlsSubmission()
+pipelineCoordinator.Wait()
+```
+
+`Wait()` ожидает завершения всего дерева задач, а не только исходных `GetItems`.
+
+---
+
+### Синхронизация goroutine
+
+В приложении используются два разных механизма синхронизации, решающих разные задачи.
+
+`PipelineCoordinator` отслеживает **логическое завершение pipeline**:
+
+```text
+Все исходные URL отправлены
+        +
+Нет незавершенных jobs
+        =
+Pipeline завершен
+```
+
+`sync.WaitGroup` используется для отслеживания **жизненного цикла goroutine**.
+
+При закрытии приложения важно не только понять, что бизнес-задачи закончились(исходные URLs), но и дождаться завершения worker-ов и других goroutine.
+
+Для разных групп goroutine могут использоваться отдельные `WaitGroup`, поскольку закрытие channels выполняется поэтапно и зависит от завершения producer-ов предыдущего уровня.
+
+---
+
+### Закрытие channels
+
+Закрытие выполняется в порядке движения данных.
+
+#### 1. requestChannel
+
+В `requestChannel` пишут:
+
+- `RunPipeline`;
+- маршрутизация после `GetItems`.
+
+Поэтому его нельзя закрывать сразу после завершения цикла по исходным URL.
+
+Сначала `PipelineCoordinator.Wait()` должен подтвердить, что все динамически созданные задачи завершены.
+
+После этого новых HTTP-задач уже не появится и `requestChannel` можно закрыть.
+
+```text
+PipelineCoordinator.Wait()
+        |
+        v
+close(requestChannel)
+```
+
+#### 2. worker channels
+
+После закрытия `requestChannel` `DispatchRequests` дочитывает оставшиеся сообщения.
+
+Когда канал полностью опустел, `range requestChannel` завершается.
+
+Так как `DispatchRequests` является единственным producer-ом `firstWorkerCh` и `secondWorkerCh`, он может закрыть их:
+
+```text
+requestChannel closed
+        |
+        v
+DispatchRequests finishes
+        |
+        +--> close(firstWorkerCh)
+        |
+        +--> close(secondWorkerCh)
+```
+
+#### 3. stageResultCh
+
+После закрытия worker channels `RequestWorker` дочитывают оставшиеся задачи и завершаются.
+
+Несколько `RequestWorker` пишут в один `stageResultCh`, поэтому ни один отдельный worker не должен закрывать этот канал.
+
+Сначала через `WaitGroup` ожидается завершение **всех** `RequestWorker`.
+
+Только после этого coordinator/orchestrator может безопасно выполнить:
+
+```go
+close(stageResultCh)
+```
+
+#### 4. HandleStageResult
+
+После закрытия `stageResultCh` `HandleStageResult` дочитывает оставшиеся результаты.
+
+Когда channel становится пустым, цикл
+
+```go
+for result := range resultCh
+```
+
+завершается и `HandleStageResult` прекращает работу.
+
+Итоговая последовательность shutdown:
+
+```text
+PipelineCoordinator.Wait()
+        |
+        v
+close(requestChannel)
+        |
+        v
+DispatchRequests finishes
+        |
+        v
+close(worker channels)
+        |
+        v
+RequestWorkers finish
+        |
+        v
+close(stageResultCh)
+        |
+        v
+HandleStageResult finishes
+        |
+        v
+Все goroutine завершены
+```
+
+Таким образом, `PipelineCoordinator` отвечает за понимание того, **когда закончилась работа pipeline**, а `WaitGroup` и последовательное закрытие channels — за **корректное завершение goroutine и инфраструктуры pipeline**.
+
+</details>
 
 ---
 
