@@ -137,7 +137,7 @@ func (p *PipelineRepo) UpdatePipelineStatus(
 	query := `
 		UPDATE pipelines 
 		SET status = $1
-		WHERE pipeline_tasks.id = $2
+		WHERE id = $2
 	`
 	_, err := p.client.Exec(
 		ctx,

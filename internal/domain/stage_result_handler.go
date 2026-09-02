@@ -200,7 +200,6 @@ func routeStageResult(
 		)
 	// Это "конечные" стадии, после них никаких других действий нет
 	case StageFillItems, StageScoreItems, StageLogItems:
-		pipelineCoordinator.Done()
 		return nil
 
 	default:
@@ -242,7 +241,5 @@ func fanOutGetItemsResult(
 			return ctx.Err()
 		}
 	}
-	// это для задачи GetItems
-	pipelineCoordinator.Done()
 	return nil
 }

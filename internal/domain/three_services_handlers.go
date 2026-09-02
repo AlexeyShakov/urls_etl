@@ -15,7 +15,7 @@ func BuildFillItemsRequest(
 	return buildItemsRequest(
 		data,
 		StageFillItems,
-		"http://localhost:8080/fillItems",
+		"http://localhost:8080/service1/fillItems",
 		itemIDs,
 	)
 }
@@ -28,7 +28,7 @@ func BuildScoreItemsRequest(
 	return buildItemsRequest(
 		data,
 		StageScoreItems,
-		"http://localhost:8080/scoreItems",
+		"http://localhost:8080/service2/scoreItems",
 		itemIDs,
 	)
 }
@@ -41,7 +41,7 @@ func BuildLogItemsRequest(
 	return buildItemsRequest(
 		data,
 		StageLogItems,
-		"http://localhost:8080/logItems",
+		"http://localhost:8080/service3/logItems",
 		itemIDs,
 	)
 }
