@@ -76,7 +76,7 @@ func RunPipeline(
 	}
 	if err := repo.UpdatePipelineStatus(ctx, PipelineStatusFinished, pipelineID); err != nil {
 		slog.Error(
-			"failed to update pipeline task statuses",
+			"failed to update pipeline status",
 			"pipeline_id", pipelineID,
 			"err", err,
 		)

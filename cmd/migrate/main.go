@@ -12,7 +12,6 @@ import (
 	"urls_etl/internal/config"
 )
 
-// todo стоить заменить на специпльную библиотеку migrate
 func main() {
 	if len(os.Args) < 2 {
 		log.Fatal("usage: go run ./cmd/migrate [up|down|version]")
