@@ -5,77 +5,74 @@ import (
 
 	"urls_etl/internal/domain"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/uptrace/bun"
 )
 
 type PipelineRepo struct {
-	client *pgxpool.Pool
+	db *bun.DB
 }
 
-func (p *PipelineRepo) SavePipeline(ctx context.Context, pipeline domain.Pipeline) (int64, error) {
-	query := `
-        INSERT INTO pipelines (status, finished_at)
-        VALUES ($1, $2)
-        RETURNING id
-    `
+func (p *PipelineRepo) SavePipeline(
+	ctx context.Context,
+	pipeline domain.Pipeline,
+) (int64, error) {
+	model := pipelineModel{
+		Status:     pipeline.Status,
+		FinishedAt: pipeline.FinishedAt,
+	}
 
-	var id int64
+	_, err := p.db.NewInsert().
+		Model(&model).
+		Exec(ctx)
 
-	err := p.client.QueryRow(
-		ctx,
-		query,
-		pipeline.Status,
-		pipeline.FinishedAt,
-	).Scan(&id)
+	if err != nil {
+		return 0, mapPostgresError(err)
+	}
 
-	return id, mapPostgresError(err)
+	return model.ID, nil
 }
 
-func (p *PipelineRepo) SavePipelineTask(ctx context.Context, task domain.PipelineTask) (int64, error) {
-	query := `
-        INSERT INTO pipeline_tasks (pipeline_id, source_url, details, status)
-        VALUES ($1, $2, $3, $4)
-        RETURNING id
-    `
+func (p *PipelineRepo) SavePipelineTask(
+	ctx context.Context,
+	task domain.PipelineTask,
+) (int64, error) {
+	model := pipelineTaskModel{
+		PipelineID: task.PipelineID,
+		SourceURL:  task.SourceURL,
+		Details:    task.Details,
+		Status:     task.Status,
+	}
 
-	var id int64
+	_, err := p.db.NewInsert().
+		Model(&model).
+		Exec(ctx)
 
-	err := p.client.QueryRow(
-		ctx,
-		query,
-		task.PipelineID,
-		task.SourceURL,
-		task.Details,
-		task.Status,
-	).Scan(&id)
+	if err != nil {
+		return 0, mapPostgresError(err)
+	}
 
-	return id, mapPostgresError(err)
+	return model.ID, nil
 }
-func (p *PipelineRepo) SaveStageResult(ctx context.Context, result domain.StageResult) error {
-	query := `
-        INSERT INTO pipeline_stage_results (
-            task_id,
-            stage,
-            status,
-            attempt,
-            details
-        )
-        VALUES ($1,$2,$3,$4,$5)
-    `
 
-	_, err := p.client.Exec(
-		ctx,
-		query,
-		result.TaskID,
-		result.Stage,
-		result.Status,
-		result.Attempt,
-		result.Details,
-	)
+func (p *PipelineRepo) SaveStageResult(
+	ctx context.Context,
+	result domain.StageResult,
+) error {
+	model := stageResultModel{
+		TaskID:  result.TaskID,
+		Stage:   result.Stage,
+		Status:  result.Status,
+		Attempt: result.Attempt,
+		Details: result.Details,
+	}
+
+	_, err := p.db.NewInsert().
+		Model(&model).
+		Exec(ctx)
 
 	return mapPostgresError(err)
 }
 
-func NewRepo(client *pgxpool.Pool) *PipelineRepo {
-	return &PipelineRepo{client}
+func NewRepo(db *bun.DB) *PipelineRepo {
+	return &PipelineRepo{db: db}
 }

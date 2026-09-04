@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"log"
-	"sync"
+
+	"golang.org/x/sync/errgroup"
+
 	"urls_etl/internal/config"
 	"urls_etl/internal/domain"
 	"urls_etl/internal/infra/db/postgresql"
@@ -33,42 +35,79 @@ func main() {
 	workerCfg := config.NewDefaultWorkersConfig()
 	httpCfg := config.NewDefaultHTTPConfig()
 
-	// Канал, куда кладется информация о внешних запросах. На схеме это next_channel
-	requestChannel := make(chan domain.PipelineData, workerCfg.RequestChannelLen)
-	// Каналы, куда складываются данные для запроса. На схеме это  in channel
-	firstWorkerCh := make(chan domain.PipelineData, workerCfg.WorkerChannelLen)
-	secondWorkerCh := make(chan domain.PipelineData, workerCfg.WorkerChannelLen)
+	// Канал, куда кладется информация о внешних запросах.
+	// На схеме это next_channel.
+	requestChannel := make(
+		chan domain.PipelineData,
+		workerCfg.RequestChannelLen,
+	)
+
+	// Каналы отдельных worker-ов.
+	firstWorkerCh := make(
+		chan domain.PipelineData,
+		workerCfg.WorkerChannelLen,
+	)
+	secondWorkerCh := make(
+		chan domain.PipelineData,
+		workerCfg.WorkerChannelLen,
+	)
 
 	client := infra_http.NewHTTPClient(httpCfg)
 	httpRequester := infra_http.NewHttpRequester(client, httpCfg)
 
+	group, groupCtx := errgroup.WithContext(context.Background())
+
 	dbConfig := config.NewDBConfig()
-	dbConnection, err := postgresql.NewConnection(context.Background(), dbConfig)
+
+	dbConnection, err := postgresql.NewConnection(groupCtx, dbConfig)
 	if err != nil {
 		log.Fatalf("No connection to db: %s", err)
 	}
+
 	repo := postgresql.NewRepo(dbConnection)
 
-	var wg sync.WaitGroup
-	wg.Add(1)
+	group.Go(func() error {
+		domain.DispatchRequests(
+			requestChannel,
+			firstWorkerCh,
+			secondWorkerCh,
+		)
 
-	go func() {
-		defer wg.Done()
-		domain.DispatchRequests(requestChannel, firstWorkerCh, secondWorkerCh)
-	}()
-	// TODO можно ли передачу каналов и кол-во воркеров сделать динамически?
-	wg.Add(2)
-	ctx := context.Background()
-	go func() {
-		defer wg.Done()
-		domain.RequestWorker(ctx, 1, firstWorkerCh, httpRequester, repo)
-	}()
+		return nil
+	})
 
-	go func() {
-		defer wg.Done()
-		domain.RequestWorker(ctx, 2, secondWorkerCh, httpRequester, repo)
-	}()
+	// TODO: сделать количество worker-ов и их каналы динамическими.
+	firstWorker := domain.NewRequestWorker(
+		1,
+		firstWorkerCh,
+		httpRequester,
+		repo,
+	)
+	secondWorker := domain.NewRequestWorker(
+		2,
+		secondWorkerCh,
+		httpRequester,
+		repo,
+	)
 
-	domain.RunPipeline(context.Background(), urls, requestChannel, repo)
-	wg.Wait()
+	group.Go(func() error {
+		firstWorker.Run(groupCtx)
+		return nil
+	})
+
+	group.Go(func() error {
+		secondWorker.Run(groupCtx)
+		return nil
+	})
+
+	domain.RunPipeline(
+		groupCtx,
+		urls,
+		requestChannel,
+		repo,
+	)
+
+	if err := group.Wait(); err != nil {
+		log.Printf("pipeline goroutine failed: %s", err)
+	}
 }
