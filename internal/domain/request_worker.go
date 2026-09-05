@@ -12,33 +12,68 @@ type Requester interface {
 	) ResponseData
 }
 
-// RequestWorker обрабатывает задачи отправления запросов на сторонний сервис
+type RequestWorker struct {
+	id        int
+	reqCh     <-chan PipelineData
+	requester Requester
+	resultCh  chan<- RequestResult
+}
+
+// Run запускает worker для обработки запросов.
 //
 // Для каждой входящей задачи worker:
 //   - выполняет запрос к стороннему сервису;
-//   - передает результат запроса дальше в канал для обработки результатов
+//   - передает результат запроса дальше в канал обработки результатов.
 //
-// Worker завершает работу после закрытия входного канала.
-func RequestWorker(
-	ctx context.Context,
-	workerID int,
+// Worker завершает работу, если:
+//   - закрыт входной канал;
+//   - отменен переданный context.
+func (w *RequestWorker) Run(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+
+		case pipelineData, ok := <-w.reqCh:
+			if !ok {
+				return
+			}
+
+			slog.Info(
+				"request worker started",
+				"worker_id", w.id,
+				"pipeline_id", pipelineData.PipelineID,
+				"task_id", pipelineData.TaskID,
+				"url", pipelineData.Request.URL,
+				"stage", pipelineData.Stage,
+			)
+
+			resp := w.requester.Do(ctx, pipelineData)
+
+			result := RequestResult{
+				PipelineData: pipelineData,
+				Response:     resp,
+			}
+
+			select {
+			case w.resultCh <- result:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
+}
+
+func NewRequestWorker(
+	id int,
 	reqCh <-chan PipelineData,
 	requester Requester,
 	resultCh chan<- RequestResult,
-) {
-	for pipelineData := range reqCh {
-		slog.Info(
-			"request worker started",
-			"worker_id", workerID,
-			"pipeline_id", pipelineData.PipelineID,
-			"task_id", pipelineData.TaskID,
-			"url", pipelineData.Request.URL,
-			"stage", pipelineData.Stage,
-		)
-		resp := requester.Do(ctx, pipelineData)
-		resultCh <- RequestResult{
-			PipelineData: pipelineData,
-			Response:     resp,
-		}
+) *RequestWorker {
+	return &RequestWorker{
+		id:        id,
+		reqCh:     reqCh,
+		requester: requester,
+		resultCh:  resultCh,
 	}
 }

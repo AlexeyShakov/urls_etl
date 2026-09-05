@@ -4,7 +4,7 @@ Pet-project на Go для практики построения конкуре�
 
 Проект охватывает работу с goroutines, channels, worker pool, fan-out, backpressure, graceful shutdown и обработку ошибок при взаимодействии с внешними сервисами и БД.
 
-**Стек:** Go, PostgreSQL, Docker.
+**Стек:** Go, PostgreSQL, Docker, Bun
 
 <details>
 <summary><strong>1. Техническое задание</strong></summary>
@@ -595,7 +595,13 @@ SQL-миграции находятся в директории:
 migrations/
 ```
 
-Для управления миграциями используется `golang-migrate`.
+Для управления миграциями используется механизм миграций `Bun`.
+
+Перед первым запуском необходимо инициализировать таблицу для хранения состояния миграций:
+
+```bash
+go run ./cmd/migrate init
+```
 
 Применить все новые миграции:
 
@@ -603,17 +609,19 @@ migrations/
 go run ./cmd/migrate up
 ```
 
-Откатить последнюю миграцию:
+Откатить последнюю группу применённых миграций:
 
 ```bash
 go run ./cmd/migrate down
 ```
 
-Посмотреть текущую версию схемы БД:
+Посмотреть состояние миграций:
 
 ```bash
-go run ./cmd/migrate version
+go run ./cmd/migrate status
 ```
+
+Bun хранит информацию о применённых миграциях в служебной таблице `bun_migrations`.
 
 #### 4. Запустить mock-сервер
 

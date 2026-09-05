@@ -3,75 +3,78 @@ package postgresql
 import (
 	"context"
 
-	"urls_etl/internal/domain"
+	"github.com/uptrace/bun"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"urls_etl/internal/domain"
 )
 
 type PipelineRepo struct {
-	client *pgxpool.Pool
+	db *bun.DB
 }
 
-func (p *PipelineRepo) SavePipeline(ctx context.Context, pipeline domain.Pipeline) (int64, error) {
-	query := `
-        INSERT INTO pipelines (status, finished_at)
-        VALUES ($1, $2)
-        RETURNING id
-    `
-
-	var id int64
-
-	err := p.client.QueryRow(
-		ctx,
-		query,
-		pipeline.Status,
-		pipeline.FinishedAt,
-	).Scan(&id)
-
-	return id, mapPostgresError(err)
+func NewRepo(db *bun.DB) *PipelineRepo {
+	return &PipelineRepo{
+		db: db,
+	}
 }
 
-func (p *PipelineRepo) SavePipelineTask(ctx context.Context, task domain.PipelineTask) (int64, error) {
-	query := `
-        INSERT INTO pipeline_tasks (pipeline_id, source_url, details, status)
-        VALUES ($1, $2, $3, $4)
-        RETURNING id
-    `
+func (p *PipelineRepo) SavePipeline(
+	ctx context.Context,
+	pipeline domain.Pipeline,
+) (int64, error) {
+	model := pipelineModel{
+		Status:     string(pipeline.Status),
+		FinishedAt: pipeline.FinishedAt,
+	}
 
-	var id int64
+	_, err := p.db.NewInsert().
+		Model(&model).
+		Returning("id").
+		Exec(ctx)
+	if err != nil {
+		return 0, mapPostgresError(err)
+	}
 
-	err := p.client.QueryRow(
-		ctx,
-		query,
-		task.PipelineID,
-		task.SourceURL,
-		task.Details,
-		task.Status,
-	).Scan(&id)
-
-	return id, mapPostgresError(err)
+	return model.ID, nil
 }
-func (p *PipelineRepo) SaveStageResult(ctx context.Context, result domain.StageResult) error {
-	query := `
-        INSERT INTO pipeline_stage_results (
-            task_id,
-            stage,
-            status,
-            attempt,
-            details
-        )
-        VALUES ($1,$2,$3,$4,$5)
-    `
 
-	_, err := p.client.Exec(
-		ctx,
-		query,
-		result.TaskID,
-		result.Stage,
-		result.Status,
-		result.Attempt,
-		result.Details,
-	)
+func (p *PipelineRepo) SavePipelineTask(
+	ctx context.Context,
+	task domain.PipelineTask,
+) (int64, error) {
+	model := pipelineTaskModel{
+		PipelineID: task.PipelineID,
+		SourceURL:  task.SourceURL,
+		Details:    task.Details,
+		Status:     string(task.Status),
+	}
+
+	_, err := p.db.NewInsert().
+		Model(&model).
+		Returning("id").
+		Exec(ctx)
+	if err != nil {
+		return 0, mapPostgresError(err)
+	}
+
+	return model.ID, nil
+}
+
+func (p *PipelineRepo) SaveStageResult(
+	ctx context.Context,
+	result domain.StageResult,
+) error {
+	model := stageResultModel{
+		TaskID:  result.TaskID,
+		Stage:   string(result.Stage),
+		Status:  string(result.Status),
+		Attempt: result.Attempt,
+		Details: result.Details,
+	}
+
+	_, err := p.db.NewInsert().
+		Model(&model).
+		Exec(ctx)
 
 	return mapPostgresError(err)
 }
@@ -80,7 +83,7 @@ func (p *PipelineRepo) SaveStageResult(ctx context.Context, result domain.StageR
 //
 // Задача считается успешной, если все обязательные стадии
 // (get_items, fill_items, score_items и log_items)
-// завершились со статусом StatusSuccess.
+// завершились со статусом success.
 // Во всех остальных случаях задача помечается как failed.
 //
 // TODO: При добавлении повторных запусков стадий учитывать
@@ -92,22 +95,6 @@ func (p *PipelineRepo) UpdatePipelineTaskStatuses(
 	ctx context.Context,
 	pipelineID int64,
 ) error {
-	query := `
-		UPDATE pipeline_tasks AS task
-		SET status = CASE
-			WHEN (
-				SELECT COUNT(DISTINCT result.stage)
-				FROM pipeline_stage_results AS result
-				WHERE result.task_id = task.id
-				  AND result.stage = ANY($2)
-				  AND result.status = $3
-			) = $4
-			THEN $5
-			ELSE $6
-		END
-		WHERE task.pipeline_id = $1
-	`
-
 	requiredStages := []domain.Stage{
 		domain.StageGetItems,
 		domain.StageFillItems,
@@ -115,16 +102,31 @@ func (p *PipelineRepo) UpdatePipelineTaskStatuses(
 		domain.StageLogItems,
 	}
 
-	_, err := p.client.Exec(
-		ctx,
+	query := `
+		UPDATE pipeline_tasks AS task
+		SET status = CASE
+			WHEN (
+				SELECT COUNT(DISTINCT result.stage)
+				FROM pipeline_stage_results AS result
+				WHERE result.task_id = task.id
+					AND result.stage IN (?)
+					AND result.status = ?
+			) = ?
+			THEN ?
+			ELSE ?
+		END
+		WHERE task.pipeline_id = ?
+	`
+
+	_, err := p.db.NewRaw(
 		query,
-		pipelineID,
-		requiredStages,
-		domain.StageStatusSuccess,
+		bun.In(requiredStages),
+		string(domain.StageStatusSuccess),
 		len(requiredStages),
-		domain.TaskStatusSuccess,
-		domain.TaskStatusFailed,
-	)
+		string(domain.TaskStatusSuccess),
+		string(domain.TaskStatusFailed),
+		pipelineID,
+	).Exec(ctx)
 
 	return mapPostgresError(err)
 }
@@ -134,22 +136,11 @@ func (p *PipelineRepo) UpdatePipelineStatus(
 	status domain.PipelineStatus,
 	pipelineID int64,
 ) error {
-	query := `
-		UPDATE pipelines 
-		SET status = $1
-		WHERE id = $2
-	`
-	_, err := p.client.Exec(
-		ctx,
-		query,
-		status,
-		pipelineID,
-	)
+	_, err := p.db.NewUpdate().
+		Model((*pipelineModel)(nil)).
+		Set("status = ?", string(status)).
+		Where("id = ?", pipelineID).
+		Exec(ctx)
 
 	return mapPostgresError(err)
-
-}
-
-func NewRepo(client *pgxpool.Pool) *PipelineRepo {
-	return &PipelineRepo{client}
 }

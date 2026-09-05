@@ -3,7 +3,11 @@ package main
 import (
 	"context"
 	"log"
-	"sync"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"golang.org/x/sync/errgroup"
 
 	"urls_etl/internal/config"
 	"urls_etl/internal/domain"
@@ -31,7 +35,12 @@ var urls = []domain.RequestData{
 }
 
 func main() {
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
+	)
+	defer stop()
 
 	workerCfg := config.NewDefaultWorkersConfig()
 	httpCfg := config.NewDefaultHTTPConfig()
@@ -47,6 +56,7 @@ func main() {
 		chan domain.PipelineData,
 		workerCfg.WorkerChannelLen,
 	)
+
 	secondWorkerCh := make(
 		chan domain.PipelineData,
 		workerCfg.WorkerChannelLen,
@@ -61,11 +71,13 @@ func main() {
 	client := infra_http.NewHTTPClient(httpCfg)
 	httpRequester := infra_http.NewHttpRequester(client, httpCfg)
 
-	dbConfig := config.NewDBConfig()
+	dbConfig := loadDBConfig()
+
 	dbConnection, err := postgresql.NewConnection(ctx, dbConfig)
 	if err != nil {
 		log.Fatalf("no connection to db: %s", err)
 	}
+	defer dbConnection.Close()
 
 	repo := postgresql.NewRepo(dbConnection)
 
@@ -77,88 +89,87 @@ func main() {
 
 	pipelineCoordinator := domain.NewPipelineCoordinator()
 
-	var wg sync.WaitGroup
+	firstRequestWorker := domain.NewRequestWorker(
+		1,
+		firstWorkerCh,
+		httpRequester,
+		stageResultCh,
+	)
 
-	// Отдельный WaitGroup нужен только для HTTP-воркеров.
+	secondRequestWorker := domain.NewRequestWorker(
+		2,
+		secondWorkerCh,
+		httpRequester,
+		stageResultCh,
+	)
+
+	stageResultWorker := domain.NewStageResultWorker(
+		repo,
+		stageResultCh,
+		requestChannel,
+		requestBuilders,
+		pipelineCoordinator,
+	)
+
+	// Основная группа долгоживущих goroutine приложения.
 	//
-	// Все HTTP-воркеры являются producer-ами общего stageResultCh.
-	// Поэтому ни один отдельный worker не может безопасно закрыть этот канал.
-	// stageResultCh можно закрыть только после завершения ВСЕХ RequestWorker.
-	var requestWorkersWG sync.WaitGroup
+	group, groupCtx := errgroup.WithContext(ctx)
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	// Отдельная группа нужна только для RequestWorker.
+	//
+	// Все RequestWorker являются producer-ами stageResultCh.
+	// Поэтому stageResultCh можно закрыть только после завершения
+	// всех HTTP-воркеров.
+	requestWorkersGroup, requestWorkersCtx := errgroup.WithContext(groupCtx)
 
+	group.Go(func() error {
 		domain.DispatchRequests(
+			groupCtx,
 			requestChannel,
 			firstWorkerCh,
 			secondWorkerCh,
 		)
-	}()
+
+		return nil
+	})
 
 	// TODO: Сделать количество worker-ов и их каналы динамическими.
-	requestWorkersWG.Add(2)
-	wg.Add(2)
+	requestWorkersGroup.Go(func() error {
+		firstRequestWorker.Run(requestWorkersCtx)
+		return nil
+	})
 
-	go func() {
-		defer wg.Done()
-		defer requestWorkersWG.Done()
+	requestWorkersGroup.Go(func() error {
+		secondRequestWorker.Run(requestWorkersCtx)
+		return nil
+	})
 
-		domain.RequestWorker(
-			ctx,
-			1,
-			firstWorkerCh,
-			httpRequester,
-			stageResultCh,
-		)
-	}()
-
-	go func() {
-		defer wg.Done()
-		defer requestWorkersWG.Done()
-
-		domain.RequestWorker(
-			ctx,
-			2,
-			secondWorkerCh,
-			httpRequester,
-			stageResultCh,
-		)
-	}()
-
-	// Закрываем stageResultCh только после завершения всех его producer-ов(RequestWorker).
+	// Закрываем stageResultCh только после завершения всех его producer-ов.
 	//
-	// Эта goroutine не добавляется в основной wg, потому что его задача —
-	// только дождаться RequestWorker и закрыть канал. После закрытия канала
-	// HandleStageResult завершит свой range и основной wg дождется его.
-	go func() {
-		requestWorkersWG.Wait()
+	// Эта goroutine входит в основную группу, потому что она связывает
+	// жизненный цикл группы RequestWorker с остальной частью pipeline.
+	group.Go(func() error {
+		err := requestWorkersGroup.Wait()
+
 		close(stageResultCh)
-	}()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+		return err
+	})
 
-		domain.HandleStageResult(
-			ctx,
-			repo,
-			stageResultCh,
-			requestChannel,
-			requestBuilders,
-			pipelineCoordinator,
-		)
-	}()
+	group.Go(func() error {
+		stageResultWorker.Run(groupCtx)
+		return nil
+	})
 
 	domain.RunPipeline(
-		ctx,
+		groupCtx,
 		urls,
 		requestChannel,
 		repo,
 		pipelineCoordinator,
 	)
 
-	// Ждем завершения Dispatcher, RequestWorker и HandleStageResult.
-	wg.Wait()
+	if err := group.Wait(); err != nil {
+		log.Printf("pipeline stopped with error: %s", err)
+	}
 }
