@@ -57,7 +57,7 @@ func main() {
 
 	group, groupCtx := errgroup.WithContext(context.Background())
 
-	dbConfig := config.NewDBConfig()
+	dbConfig := loadDBConfig()
 
 	dbConnection, err := postgresql.NewConnection(groupCtx, dbConfig)
 	if err != nil {
