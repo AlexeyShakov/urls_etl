@@ -19,7 +19,7 @@ import (
 //
 // В дальнейшем параметры пула, например максимальное количество
 // открытых и простаивающих соединений, можно настроить через database/sql.
-func NewConnection(ctx context.Context, cfg config.Config) (*bun.DB, error) {
+func NewConnection(ctx context.Context, cfg config.PostgresConfig) (*bun.DB, error) {
 	sqlDB := sql.OpenDB(
 		pgdriver.NewConnector(
 			pgdriver.WithDSN(cfg.DSN()),

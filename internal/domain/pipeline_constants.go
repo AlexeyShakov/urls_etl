@@ -1,16 +1,34 @@
 package domain
 
-const (
-	StageGetItems   string = "get_items"
-	StageFillItems  string = "fill_items"
-	StageScoreItems string = "score_items"
-	StageLogItems   string = "log_items"
-	StageSaveResult string = "save_result"
-)
+type Stage string
 
 const (
-	StatusPending    string = "pending"
-	StatusProcessing string = "processing"
-	StatusSuccess    string = "success"
-	StatusFailed     string = "failed"
+	StageGetItems   Stage = "get_items"
+	StageFillItems  Stage = "fill_items"
+	StageScoreItems Stage = "score_items"
+	StageLogItems   Stage = "log_items"
+)
+
+type TaskStatus string
+
+const (
+	TaskStatusProcessing TaskStatus = "processing"
+	TaskStatusSuccess    TaskStatus = "success"
+	TaskStatusFailed     TaskStatus = "failed"
+)
+
+type PipelineStatus string
+
+const (
+	PipelineStatusPending    PipelineStatus = "pending"
+	PipelineStatusProcessing PipelineStatus = "processing"
+	PipelineStatusFinished   PipelineStatus = "finished"
+	PipelineStatusStopped    PipelineStatus = "stopped"
+)
+
+type StageStatus string
+
+const (
+	StageStatusSuccess StageStatus = "success"
+	StageStatusFail    StageStatus = "failed"
 )

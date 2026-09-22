@@ -7,7 +7,6 @@ import (
 
 	"github.com/uptrace/bun/migrate"
 
-	"urls_etl/internal/config"
 	"urls_etl/internal/infra/db/postgresql"
 	"urls_etl/migrations"
 )
@@ -19,7 +18,7 @@ func main() {
 
 	ctx := context.Background()
 
-	dbCfg := config.NewDBConfig()
+	dbCfg := loadDBConfig()
 
 	db, err := postgresql.NewConnection(ctx, dbCfg)
 	if err != nil {

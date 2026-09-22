@@ -1,6 +1,9 @@
 package domain
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 // DispatchRequests распределяет входящие запросы между worker-ами.
 //
@@ -8,16 +11,27 @@ import "fmt"
 // Каждый запрос отправляется в первый доступный worker channel.
 // После закрытия reqCh функция закрывает worker channels,
 // так как именно она является их единственным sender-ом.
-func DispatchRequests(reqCh <-chan PipelineData, firstWorkerCh, secondWorkerCh chan<- PipelineData) {
-	// Это work link asker на схеме
-	for req := range reqCh {
+func DispatchRequests(ctx context.Context, reqCh <-chan PipelineData, firstWorkerCh, secondWorkerCh chan<- PipelineData) {
+	defer func() {
+		close(firstWorkerCh)
+		close(secondWorkerCh)
+	}()
+	for {
 		select {
-		case firstWorkerCh <- req:
-			fmt.Println("Sent to firstWorkerCh") // TODO что мы должны поставить сюда вместо printc
-		case secondWorkerCh <- req:
-			fmt.Println("Sent to secondWorkerCh") // TODO что мы должны поставить сюда вместо printc
+		case <-ctx.Done():
+			return
+		case req, ok := <-reqCh:
+			if !ok {
+				return
+			}
+			select {
+			case firstWorkerCh <- req:
+				fmt.Println("Sent to firstWorkerCh")
+			case secondWorkerCh <- req:
+				fmt.Println("Sent to secondWorkerCh")
+			case <-ctx.Done():
+				return
+			}
 		}
 	}
-	close(firstWorkerCh)
-	close(secondWorkerCh)
 }

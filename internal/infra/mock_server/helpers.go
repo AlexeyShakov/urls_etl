@@ -19,12 +19,12 @@ func MaybeWriteRandomError(w http.ResponseWriter) bool {
 	roll := rand.Intn(100)
 
 	switch {
-	case roll < 85:
-		// 85% успешных ответов
+	case roll < 90:
+		// 90% успешных ответов
 		return false
 
 	case roll < 95:
-		// 10% non-retryable ошибок
+		// 5% non-retryable ошибок
 		status := NonRetryableStatuses[rand.Intn(len(NonRetryableStatuses))]
 		writeErrorResponse(w, status)
 		return true
