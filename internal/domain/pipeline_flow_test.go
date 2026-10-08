@@ -8,11 +8,11 @@ import (
 	"time"
 )
 
-// TestWholePipeline тестируем весь пайплайн, но с fake-сущностями: fake-DB и fake-http
+// TestWholePipeline тестируем весь пайплайн, но с fake-сущностями: fake-DB и fake-http_client
 func TestWholePipeline(t *testing.T) {
 	//todo 1. создать fake-repository
 	// скорее всего тут нужно хранить мапу, куда будем класть данные, чтобы в конце проверить, что данные есть
-	//todo 2. создать http ответы
+	//todo 2. создать http_client ответы
 
 	// ТЕСТ КЕЙСЫ
 	// RunPipeline

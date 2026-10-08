@@ -8,12 +8,24 @@ import (
 	"time"
 )
 
+type StageResultRepository interface {
+	SaveStageResult(ctx context.Context, result StageResult) error
+}
+
+type StageResultCoordinator interface {
+	// Add увеличивает количество незавершенных задач пайплайна.
+	Add(n int)
+
+	// Done отмечает завершение одной задачи пайплайна.
+	Done()
+}
+
 type StageResultWorker struct {
-	repo                PipelineRepository
+	repo                StageResultRepository
 	resultCh            <-chan RequestResult
 	requestCh           chan<- PipelineData
 	builders            []ItemsRequestBuilder
-	pipelineCoordinator IPipelineCoordinator
+	pipelineCoordinator StageResultCoordinator
 }
 
 // Run запускает обработку результатов выполненных стадий.
@@ -174,11 +186,11 @@ func (w *StageResultWorker) fanOutGetItemsResult(
 }
 
 func NewStageResultWorker(
-	repo PipelineRepository,
+	repo StageResultRepository,
 	resultCh <-chan RequestResult,
 	requestCh chan<- PipelineData,
 	builders []ItemsRequestBuilder,
-	pipelineCoordinator IPipelineCoordinator,
+	pipelineCoordinator StageResultCoordinator,
 ) *StageResultWorker {
 	return &StageResultWorker{
 		repo:                repo,

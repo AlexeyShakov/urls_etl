@@ -3,16 +3,15 @@ package main
 import (
 	"context"
 	"log"
+	"log/slog"
 	"os"
-	"os/signal"
-	"syscall"
+	"urls_etl/internal/infra/shutdown"
 
 	"golang.org/x/sync/errgroup"
 
-	"urls_etl/internal/config"
 	"urls_etl/internal/domain"
 	"urls_etl/internal/infra/db/postgresql"
-	infra_http "urls_etl/internal/infra/http"
+	"urls_etl/internal/infra/http_client"
 )
 
 var urls = []domain.RequestData{
@@ -35,45 +34,48 @@ var urls = []domain.RequestData{
 }
 
 func main() {
-	ctx, stop := signal.NotifyContext(
-		context.Background(),
-		os.Interrupt,
-		syscall.SIGTERM,
-	)
-	defer stop()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	workerCfg := config.NewDefaultWorkersConfig()
-	httpCfg := config.NewDefaultHTTPConfig()
+	go watchShutdown(ctx, cancel, shutdown.OSSource{})
+
+	cfg, err := loadConfig()
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
+	}
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: cfg.Logging.Level,
+	}))
+	slog.SetDefault(logger)
 
 	// Общий канал задач для выполнения HTTP-запросов.
 	requestChannel := make(
 		chan domain.PipelineData,
-		workerCfg.RequestChannelLen,
+		cfg.Workers.RequestChannelLen,
 	)
 
 	// Входные каналы HTTP-воркеров.
 	firstWorkerCh := make(
 		chan domain.PipelineData,
-		workerCfg.WorkerChannelLen,
+		cfg.Workers.WorkerChannelLen,
 	)
 
 	secondWorkerCh := make(
 		chan domain.PipelineData,
-		workerCfg.WorkerChannelLen,
+		cfg.Workers.WorkerChannelLen,
 	)
 
 	// Канал результатов HTTP-запросов.
 	stageResultCh := make(
 		chan domain.RequestResult,
-		workerCfg.WorkerChannelLen,
+		cfg.Workers.WorkerChannelLen,
 	)
 
-	client := infra_http.NewHTTPClient(httpCfg)
-	httpRequester := infra_http.NewHttpRequester(client, httpCfg)
+	client := http_client.NewHTTPClient(cfg.HTTP)
+	httpRequester := http_client.NewHttpRequester(client, cfg.HTTP)
 
-	dbConfig := loadDBConfig()
-
-	dbConnection, err := postgresql.NewConnection(ctx, dbConfig)
+	dbConnection, err := postgresql.NewConnection(ctx, cfg.Postgres)
 	if err != nil {
 		log.Fatalf("no connection to db: %s", err)
 	}
@@ -161,15 +163,17 @@ func main() {
 		return nil
 	})
 
-	domain.RunPipeline(
+	if runPipeErr := domain.RunPipeline(
 		groupCtx,
 		urls,
 		requestChannel,
 		repo,
 		pipelineCoordinator,
-	)
+	); runPipeErr != nil {
+		slog.Error("RunPipeline failed", "err", runPipeErr)
+	}
 
 	if err := group.Wait(); err != nil {
-		log.Printf("pipeline stopped with error: %s", err)
+		slog.Error("pipeline stopped with error", "err", err)
 	}
 }

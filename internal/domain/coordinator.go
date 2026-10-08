@@ -1,6 +1,9 @@
 package domain
 
-import "sync"
+import (
+	"context"
+	"sync"
+)
 
 type PipelineCoordinator struct {
 	counter                       int
@@ -39,13 +42,27 @@ func (p *PipelineCoordinator) FinishInitialUrlsSubmission() {
 	p.cond.Broadcast()
 }
 
-func (p *PipelineCoordinator) Wait() {
+func (p *PipelineCoordinator) Wait(ctx context.Context) error {
+	stop := context.AfterFunc(ctx, func() {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+
+		p.cond.Broadcast()
+	})
+	defer stop()
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	// todo нужен механизм, чтобы не зависнули навсегда
+
 	for !p.initialUrlsSubmissionFinished || p.counter != 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		p.cond.Wait()
 	}
+
+	return ctx.Err()
 }
 
 func NewPipelineCoordinator() *PipelineCoordinator {

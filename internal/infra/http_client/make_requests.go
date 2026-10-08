@@ -1,8 +1,9 @@
-package http
+package http_client
 
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +11,10 @@ import (
 	"urls_etl/internal/config"
 	"urls_etl/internal/domain"
 )
+
+// Максимальный размер тела ответа — 1 MiB.
+// Значение лучше передавать из HTTP-конфига.
+const maxResponseBodyBytes int64 = 1 << 20
 
 type HTTPRequester struct {
 	client *http.Client
@@ -61,6 +66,21 @@ func makeRequestWithRetry(
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		resp, err := makeRequest(ctx, client, req)
 
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			if err != nil {
+				return domain.ResponseData{
+					URL: req.URL,
+					Err: ctxErr,
+				}
+			}
+			resp.Err = ctxErr
+			return resp
+		}
+
+		if errors.Is(err, ErrResponseBodyTooLarge) {
+			return resp
+		}
+
 		if err != nil {
 			lastErr = err
 			lastResp = domain.ResponseData{
@@ -84,7 +104,12 @@ func makeRequestWithRetry(
 		}
 
 		if attempt < maxRetries {
-			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
+			delay := time.Duration(attempt) * 500 * time.Millisecond
+
+			if err := waitBeforeRetry(ctx, delay); err != nil {
+				lastResp.Err = err
+				return lastResp
+			}
 		}
 	}
 
@@ -97,6 +122,19 @@ func makeRequestWithRetry(
 	}
 
 	return lastResp
+}
+
+// waitBeforeRetry ожидает задержку или отмену контекста.
+func waitBeforeRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // makeRequest создает и отправляет один HTTP-запрос.
@@ -130,8 +168,22 @@ func makeRequest(
 		_ = httpResp.Body.Close()
 	}()
 
-	bodyBytes, err := io.ReadAll(httpResp.Body)
+	bodyBytes, err := io.ReadAll(io.LimitReader(httpResp.Body, maxResponseBodyBytes+1))
+
 	if err != nil {
+		return domain.ResponseData{
+			URL:        reqData.URL,
+			StatusCode: httpResp.StatusCode,
+			Err:        err,
+		}, err
+	}
+
+	if int64(len(bodyBytes)) > maxResponseBodyBytes {
+		err := fmt.Errorf(
+			"%w: limit is %d bytes",
+			ErrResponseBodyTooLarge,
+			maxResponseBodyBytes,
+		)
 		return domain.ResponseData{
 			URL:        reqData.URL,
 			StatusCode: httpResp.StatusCode,

@@ -102,31 +102,27 @@ func (p *PipelineRepo) UpdatePipelineTaskStatuses(
 		domain.StageLogItems,
 	}
 
-	query := `
-		UPDATE pipeline_tasks AS task
-		SET status = CASE
-			WHEN (
-				SELECT COUNT(DISTINCT result.stage)
-				FROM pipeline_stage_results AS result
-				WHERE result.task_id = task.id
-					AND result.stage IN (?)
-					AND result.status = ?
-			) = ?
-			THEN ?
-			ELSE ?
-		END
-		WHERE task.pipeline_id = ?
-	`
+	successfulStages := p.db.NewSelect().
+		TableExpr("pipeline_stage_results AS result").
+		ColumnExpr("COUNT(DISTINCT result.stage)").
+		Where("result.task_id = task.id").
+		Where("result.stage IN (?)", bun.In(requiredStages)).
+		Where("result.status = ?", string(domain.StageStatusSuccess))
 
-	_, err := p.db.NewRaw(
-		query,
-		bun.In(requiredStages),
-		string(domain.StageStatusSuccess),
-		len(requiredStages),
-		string(domain.TaskStatusSuccess),
-		string(domain.TaskStatusFailed),
-		pipelineID,
-	).Exec(ctx)
+	_, err := p.db.NewUpdate().
+		TableExpr("pipeline_tasks AS task").
+		Set(
+			`status = CASE
+				WHEN (?) = ? THEN ?
+				ELSE ?
+			END`,
+			successfulStages,
+			len(requiredStages),
+			string(domain.TaskStatusSuccess),
+			string(domain.TaskStatusFailed),
+		).
+		Where("task.pipeline_id = ?", pipelineID).
+		Exec(ctx)
 
 	return mapPostgresError(err)
 }

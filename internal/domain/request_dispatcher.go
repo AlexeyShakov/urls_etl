@@ -2,7 +2,7 @@ package domain
 
 import (
 	"context"
-	"fmt"
+	"log/slog"
 )
 
 // DispatchRequests распределяет входящие запросы между worker-ами.
@@ -26,9 +26,19 @@ func DispatchRequests(ctx context.Context, reqCh <-chan PipelineData, firstWorke
 			}
 			select {
 			case firstWorkerCh <- req:
-				fmt.Println("Sent to firstWorkerCh")
+				slog.Debug(
+					"request dispatched",
+					"worker_id", 1,
+					"pipeline_id", req.PipelineID,
+					"task_id", req.TaskID,
+				)
 			case secondWorkerCh <- req:
-				fmt.Println("Sent to secondWorkerCh")
+				slog.Debug(
+					"request dispatched",
+					"worker_id", 2,
+					"pipeline_id", req.PipelineID,
+					"task_id", req.TaskID,
+				)
 			case <-ctx.Done():
 				return
 			}
