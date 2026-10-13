@@ -1,10 +1,11 @@
-package domain_new
+package pipeline
 
 import (
 	"encoding/json"
 	"time"
 )
 
+// TaskStatus определяет состояние задачи пайплайна.
 type TaskStatus string
 
 const (
@@ -13,6 +14,7 @@ const (
 	TaskStatusFailed     TaskStatus = "failed"
 )
 
+// PipelineTask хранит исходный запрос и состояние задачи пайплайна.
 type PipelineTask struct {
 	ID         int64
 	PipelineID int64

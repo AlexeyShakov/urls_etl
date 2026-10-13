@@ -135,7 +135,7 @@ func main() {
 		return nil
 	})
 
-	// TODO: Сделать количество worker-ов и их каналы динамическими.
+	// TODO: Сделать количество requests-ов и их каналы динамическими.
 	requestWorkersGroup.Go(func() error {
 		firstRequestWorker.Run(requestWorkersCtx)
 		return nil

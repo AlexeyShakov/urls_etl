@@ -1,7 +1,8 @@
-package domain_new
+package pipeline
 
 import "time"
 
+// PipelineStatus определяет состояние пайплайна.
 type PipelineStatus string
 
 const (
@@ -11,6 +12,7 @@ const (
 	PipelineStatusStopped    PipelineStatus = "stopped"
 )
 
+// Pipeline хранит состояние и время выполнения пайплайна.
 type Pipeline struct {
 	ID         int64
 	Status     PipelineStatus

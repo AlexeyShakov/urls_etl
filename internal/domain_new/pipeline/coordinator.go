@@ -1,10 +1,11 @@
-package domain_new
+package pipeline
 
 import (
 	"context"
 	"sync"
 )
 
+// PipelineCoordinator отслеживает количество незавершенных работ пайплайна.
 type PipelineCoordinator struct {
 	counter                       int
 	initialUrlsSubmissionFinished bool
@@ -12,13 +13,23 @@ type PipelineCoordinator struct {
 	cond                          *sync.Cond
 }
 
+// NewPipelineCoordinator создает координатор пайплайна.
+func NewPipelineCoordinator() *PipelineCoordinator {
+	coordinator := &PipelineCoordinator{}
+	coordinator.cond = sync.NewCond(&coordinator.mu)
+
+	return coordinator
+}
+
+// Add увеличивает количество незавершенных работ.
 func (p *PipelineCoordinator) Add(n int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
 	p.counter += n
 }
 
-// Done отмечает завершение одной задачи пайплайна.
+// Done отмечает завершение одной работы.
 func (p *PipelineCoordinator) Done() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -28,25 +39,25 @@ func (p *PipelineCoordinator) Done() {
 	}
 
 	p.counter--
-
 	p.cond.Broadcast()
 }
 
+// FinishInitialUrlsSubmission отмечает завершение отправки начальных задач.
 func (p *PipelineCoordinator) FinishInitialUrlsSubmission() {
-	//todo а точно ли здесь нужно брать блокировку?
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	p.initialUrlsSubmissionFinished = true
-
 	p.cond.Broadcast()
 }
 
+// Wait ожидает завершения всех работ или отмены контекста.
 func (p *PipelineCoordinator) Wait(ctx context.Context) error {
 	stop := context.AfterFunc(ctx, func() {
 		p.mu.Lock()
 		defer p.mu.Unlock()
 
+		// Блокировка предотвращает потерю уведомления перед cond.Wait().
 		p.cond.Broadcast()
 	})
 	defer stop()
@@ -63,10 +74,4 @@ func (p *PipelineCoordinator) Wait(ctx context.Context) error {
 	}
 
 	return ctx.Err()
-}
-
-func NewPipelineCoordinator() *PipelineCoordinator {
-	coordinator := &PipelineCoordinator{}
-	coordinator.cond = sync.NewCond(&coordinator.mu)
-	return coordinator
 }

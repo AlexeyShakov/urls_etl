@@ -32,7 +32,7 @@ func TestWholePipeline(t *testing.T) {
 // Проверяем, что:
 //   - pipeline сохраняется в БД;
 //   - для каждого URL создается PipelineTask;
-//   - каждый URL обрабатывается worker-ом;
+//   - каждый URL обрабатывается requests-ом;
 //   - для каждой задачи сохраняется StageResult со статусом success.
 func TestWholePipelineSuccess(t *testing.T) {
 	ctx := context.Background()
@@ -108,14 +108,14 @@ func TestWholePipelineSuccess(t *testing.T) {
 // когда pipeline не удалось сохранить в БД.
 //
 // В этом случае RunPipeline должен завершиться раньше,
-// чем задачи попадут в worker-ы.
+// чем задачи попадут в requests-ы.
 //
 // Проверяем, что:
 //   - попытка сохранить pipeline была выполнена;
 //   - PipelineTask не создавались;
 //   - Requester не вызывался;
 //   - StageResult не сохранялись;
-//   - worker-ы корректно завершились после закрытия каналов.
+//   - requests-ы корректно завершились после закрытия каналов.
 func TestWholePipeline_SavePipelineFailed(t *testing.T) {
 	ctx := context.Background()
 
@@ -132,14 +132,14 @@ func TestWholePipeline_SavePipelineFailed(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// Запускаем dispatcher так же, как в реальном pipeline.
-	// Он будет читать из requestChannel и распределять задачи между worker-ами.
+	// Он будет читать из requestChannel и распределять задачи между requests-ами.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		DispatchRequests(requestChannel, firstWorkerCh, secondWorkerCh)
 	}()
 
-	// Запускаем оба worker-а, чтобы тест проверял полный flow,
+	// Запускаем оба requests-а, чтобы тест проверял полный flow,
 	// а не только изолированную функцию RunPipeline.
 	wg.Add(2)
 	go func() {
@@ -183,7 +183,7 @@ func TestWholePipeline_SavePipelineFailed(t *testing.T) {
 //
 // После успешного retry pipeline должен продолжить работу:
 //   - создать PipelineTask для каждого URL;
-//   - отправить задачи в worker-ы;
+//   - отправить задачи в requests-ы;
 //   - выполнить запросы через requester;
 //   - сохранить StageResult со статусом success.
 func TestWholePipeline_SavePipelineRetrySuccess(t *testing.T) {
@@ -265,10 +265,10 @@ func TestWholePipeline_SavePipelineRetrySuccess(t *testing.T) {
 // Проверяем, что:
 //   - pipeline сохранен;
 //   - попытки сохранить PipelineTask были выполнены;
-//   - задачи не попали в worker-ы;
+//   - задачи не попали в requests-ы;
 //   - Requester не вызывался;
 //   - StageResult не сохранялись;
-//   - worker-ы корректно завершились после закрытия каналов.
+//   - requests-ы корректно завершились после закрытия каналов.
 func TestWholePipeline_SaveTaskFailed(t *testing.T) {
 	ctx := context.Background()
 
@@ -343,7 +343,7 @@ func TestWholePipeline_SaveTaskFailed(t *testing.T) {
 //
 // Первая попытка SavePipelineTask завершается retryable-ошибкой,
 // повторная попытка проходит успешно.
-// После этого задача должна попасть в worker,
+// После этого задача должна попасть в requests,
 // запрос должен выполниться, а StageResult должен сохраниться со статусом success.
 func TestWholePipeline_SaveTaskRetrySuccess(t *testing.T) {
 	ctx := context.Background()
@@ -585,14 +585,14 @@ func TestWholePipeline_RequestFailedStageResultRetrySuccess(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// Запускаем dispatcher, который перенаправляет задачи
-	// из общего канала в worker channels.
+	// из общего канала в requests channels.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		DispatchRequests(requestChannel, firstWorkerCh, secondWorkerCh)
 	}()
 
-	// Запускаем оба worker-а как в реальном pipeline.
+	// Запускаем оба requests-а как в реальном pipeline.
 	// Несмотря на то, что URL один, это проверяет полный flow:
 	// RunPipeline -> DispatchRequests -> RequestWorker.
 	wg.Add(2)
@@ -721,7 +721,7 @@ func TestWholePipeline_RequestFailedStageResultSaveFailed(t *testing.T) {
 		DispatchRequests(requestChannel, firstWorkerCh, secondWorkerCh)
 	}()
 
-	// Запускаем два worker-а как в реальном приложении.
+	// Запускаем два requests-а как в реальном приложении.
 	wg.Add(2)
 	go func() {
 		defer wg.Done()

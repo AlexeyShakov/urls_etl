@@ -19,9 +19,9 @@ type RequestWorker struct {
 	resultCh  chan<- RequestResult
 }
 
-// Run запускает worker для обработки запросов.
+// Run запускает requests для обработки запросов.
 //
-// Для каждой входящей задачи worker:
+// Для каждой входящей задачи requests:
 //   - выполняет запрос к стороннему сервису;
 //   - передает результат запроса дальше в канал обработки результатов.
 //
@@ -40,7 +40,7 @@ func (w *RequestWorker) Run(ctx context.Context) {
 			}
 
 			slog.Info(
-				"request worker started",
+				"request requests started",
 				"worker_id", w.id,
 				"pipeline_id", pipelineData.PipelineID,
 				"task_id", pipelineData.TaskID,

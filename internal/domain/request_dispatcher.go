@@ -5,11 +5,11 @@ import (
 	"log/slog"
 )
 
-// DispatchRequests распределяет входящие запросы между worker-ами.
+// DispatchRequests распределяет входящие запросы между requests-ами.
 //
 // Функция читает запросы из reqCh до тех пор, пока канал не будет закрыт.
-// Каждый запрос отправляется в первый доступный worker channel.
-// После закрытия reqCh функция закрывает worker channels,
+// Каждый запрос отправляется в первый доступный requests channel.
+// После закрытия reqCh функция закрывает requests channels,
 // так как именно она является их единственным sender-ом.
 func DispatchRequests(ctx context.Context, reqCh <-chan PipelineData, firstWorkerCh, secondWorkerCh chan<- PipelineData) {
 	defer func() {
