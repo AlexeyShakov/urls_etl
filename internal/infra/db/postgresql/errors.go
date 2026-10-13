@@ -4,11 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"urls_etl/internal/domain_new/pipeline"
 
 	"github.com/jackc/pgerrcode"
 	"github.com/uptrace/bun/driver/pgdriver"
-
-	"urls_etl/internal/domain"
 )
 
 func mapPostgresError(err error) error {
@@ -19,7 +18,7 @@ func mapPostgresError(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf(
 			"%w: %v",
-			domain.ErrStorageUnavailableRetryable,
+			pipeline.ErrStorageUnavailableRetryable,
 			err,
 		)
 	}
@@ -36,7 +35,7 @@ func mapPostgresError(err error) error {
 
 			return fmt.Errorf(
 				"%w: %v",
-				domain.ErrStorageUnavailableRetryable,
+				pipeline.ErrStorageUnavailableRetryable,
 				err,
 			)
 		}
@@ -44,7 +43,7 @@ func mapPostgresError(err error) error {
 
 	return fmt.Errorf(
 		"%w: %v",
-		domain.ErrStorageUnavailableNonRetryable,
+		pipeline.ErrStorageUnavailableNonRetryable,
 		err,
 	)
 }

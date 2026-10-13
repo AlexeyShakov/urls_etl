@@ -9,9 +9,10 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"urls_etl/internal/config"
 	"urls_etl/internal/domain_new/pipeline"
 	"urls_etl/internal/domain_new/requests"
-	"urls_etl/internal/domain_new/stage"
+	"urls_etl/internal/domain_new/stages"
 	"urls_etl/internal/infra/db/postgresql"
 	"urls_etl/internal/infra/http_client"
 	"urls_etl/internal/infra/shutdown"
@@ -46,13 +47,14 @@ func main() {
 
 // run создает зависимости, запускает пайплайн и ожидает завершения воркеров.
 func run() error {
-	cfg, err := loadConfig()
-	if err != nil {
-		return fmt.Errorf("load configuration: %w", err)
-	}
+	workerCfg := config.NewDefaultWorkersConfig()
+	httpCfg := config.NewDefaultHTTPConfig()
+
+	// Загружаем .env до чтения уровня логирования.
+	dbCfg := loadDBConfig()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: cfg.Logging.Level,
+		Level: config.GetLogLevel(),
 	}))
 	slog.SetDefault(logger)
 
@@ -61,12 +63,12 @@ func run() error {
 
 	go watchShutdown(ctx, cancel, shutdown.OSSource{})
 
-	client := http_client.NewHTTPClient(cfg.HTTP)
+	client := http_client.NewHTTPClient(httpCfg)
 	defer client.CloseIdleConnections()
 
-	httpRequester := http_client.NewHttpRequester(client, cfg.HTTP)
+	httpRequester := http_client.NewHttpRequester(client, httpCfg)
 
-	dbConnection, err := postgresql.NewConnection(ctx, cfg.Postgres)
+	dbConnection, err := postgresql.NewConnection(ctx, dbCfg)
 	if err != nil {
 		return fmt.Errorf("connect to PostgreSQL: %w", err)
 	}
@@ -80,28 +82,28 @@ func run() error {
 
 	requestChannel := make(
 		chan pipeline.PipelineData,
-		cfg.Workers.RequestChannelLen,
+		workerCfg.RequestChannelLen,
 	)
 
 	firstWorkerCh := make(
 		chan pipeline.PipelineData,
-		cfg.Workers.WorkerChannelLen,
+		workerCfg.WorkerChannelLen,
 	)
 
 	secondWorkerCh := make(
 		chan pipeline.PipelineData,
-		cfg.Workers.WorkerChannelLen,
+		workerCfg.WorkerChannelLen,
 	)
 
 	stageResultCh := make(
 		chan pipeline.RequestResult,
-		cfg.Workers.WorkerChannelLen,
+		workerCfg.WorkerChannelLen,
 	)
 
-	requestBuilders := []stage.ItemsRequestBuilder{
-		stage.BuildFillItemsRequest,
-		stage.BuildScoreItemsRequest,
-		stage.BuildLogItemsRequest,
+	requestBuilders := []stages.ItemsRequestBuilder{
+		stages.BuildFillItemsRequest,
+		stages.BuildScoreItemsRequest,
+		stages.BuildLogItemsRequest,
 	}
 
 	coordinator := pipeline.NewPipelineCoordinator()
@@ -120,7 +122,7 @@ func run() error {
 		stageResultCh,
 	)
 
-	stageResultWorker := stage.NewStageResultWorker(
+	stageResultWorker := stages.NewStageResultWorker(
 		repo,
 		stageResultCh,
 		requestChannel,
@@ -176,7 +178,6 @@ func run() error {
 		coordinator,
 	)
 	if runPipeErr != nil {
-		// Останавливаем воркеры перед ожиданием их завершения.
 		cancel()
 	}
 

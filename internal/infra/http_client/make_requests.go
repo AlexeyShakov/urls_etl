@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 	"urls_etl/internal/config"
-	"urls_etl/internal/domain"
+	"urls_etl/internal/domain_new/pipeline"
 )
 
 // Максимальный размер тела ответа — 1 MiB.
@@ -23,8 +23,8 @@ type HTTPRequester struct {
 
 func (r *HTTPRequester) Do(
 	ctx context.Context,
-	pipelineData domain.PipelineData,
-) domain.ResponseData {
+	pipelineData pipeline.PipelineData,
+) pipeline.ResponseData {
 	return makeRequestWithRetry(
 		ctx,
 		r.client,
@@ -57,10 +57,10 @@ func NewHttpRequester(client *http.Client, cfg config.HTTPConfig) *HTTPRequester
 func makeRequestWithRetry(
 	ctx context.Context,
 	client *http.Client,
-	req domain.RequestData,
+	req pipeline.RequestData,
 	maxRetries int,
-) domain.ResponseData {
-	var lastResp domain.ResponseData
+) pipeline.ResponseData {
+	var lastResp pipeline.ResponseData
 	var lastErr error
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
@@ -68,7 +68,7 @@ func makeRequestWithRetry(
 
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			if err != nil {
-				return domain.ResponseData{
+				return pipeline.ResponseData{
 					URL: req.URL,
 					Err: ctxErr,
 				}
@@ -83,7 +83,7 @@ func makeRequestWithRetry(
 
 		if err != nil {
 			lastErr = err
-			lastResp = domain.ResponseData{
+			lastResp = pipeline.ResponseData{
 				URL: req.URL,
 				Err: err,
 			}
@@ -144,8 +144,8 @@ func waitBeforeRetry(ctx context.Context, delay time.Duration) error {
 func makeRequest(
 	ctx context.Context,
 	client *http.Client,
-	reqData domain.RequestData,
-) (domain.ResponseData, error) {
+	reqData pipeline.RequestData,
+) (pipeline.ResponseData, error) {
 	httpReq, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodPost,
@@ -153,7 +153,7 @@ func makeRequest(
 		bytes.NewBufferString(reqData.Payload),
 	)
 	if err != nil {
-		return domain.ResponseData{URL: reqData.URL, Err: err}, err
+		return pipeline.ResponseData{URL: reqData.URL, Err: err}, err
 	}
 
 	for key, value := range reqData.Headers {
@@ -162,7 +162,7 @@ func makeRequest(
 
 	httpResp, err := client.Do(httpReq)
 	if err != nil {
-		return domain.ResponseData{URL: reqData.URL, Err: err}, err
+		return pipeline.ResponseData{URL: reqData.URL, Err: err}, err
 	}
 	defer func() {
 		_ = httpResp.Body.Close()
@@ -171,7 +171,7 @@ func makeRequest(
 	bodyBytes, err := io.ReadAll(io.LimitReader(httpResp.Body, maxResponseBodyBytes+1))
 
 	if err != nil {
-		return domain.ResponseData{
+		return pipeline.ResponseData{
 			URL:        reqData.URL,
 			StatusCode: httpResp.StatusCode,
 			Err:        err,
@@ -184,14 +184,14 @@ func makeRequest(
 			ErrResponseBodyTooLarge,
 			maxResponseBodyBytes,
 		)
-		return domain.ResponseData{
+		return pipeline.ResponseData{
 			URL:        reqData.URL,
 			StatusCode: httpResp.StatusCode,
 			Err:        err,
 		}, err
 	}
 
-	return domain.ResponseData{
+	return pipeline.ResponseData{
 		URL:        reqData.URL,
 		StatusCode: httpResp.StatusCode,
 		Body:       string(bodyBytes),

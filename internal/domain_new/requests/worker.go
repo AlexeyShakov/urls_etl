@@ -56,7 +56,7 @@ func (w *RequestWorker) Run(ctx context.Context) {
 				"pipeline_id", data.PipelineID,
 				"task_id", data.TaskID,
 				"url", data.Request.URL,
-				"stage", data.Stage,
+				"stages", data.Stage,
 			)
 
 			response := w.requester.Do(ctx, data)

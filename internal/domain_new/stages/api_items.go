@@ -1,4 +1,4 @@
-package stage
+package stages
 
 // ItemIDsPayload содержит список идентификаторов товаров.
 type ItemIDsPayload struct {

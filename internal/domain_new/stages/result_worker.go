@@ -1,4 +1,4 @@
-package stage
+package stages
 
 import (
 	"context"
@@ -75,10 +75,10 @@ func (w *StageResultWorker) handleOne(
 
 	if err := w.saveStageResult(ctx, result, status); err != nil {
 		slog.Error(
-			"failed to save stage result",
+			"failed to save stages result",
 			"pipeline_id", data.PipelineID,
 			"task_id", data.TaskID,
-			"stage", data.Stage,
+			"stages", data.Stage,
 			"status", status,
 			"err", err,
 		)
@@ -86,10 +86,10 @@ func (w *StageResultWorker) handleOne(
 	}
 
 	slog.Info(
-		"stage result saved",
+		"stages result saved",
 		"pipeline_id", data.PipelineID,
 		"task_id", data.TaskID,
-		"stage", data.Stage,
+		"stages", data.Stage,
 		"status", status,
 	)
 
@@ -99,10 +99,10 @@ func (w *StageResultWorker) handleOne(
 
 	if err := w.routeStageResult(ctx, result); err != nil {
 		slog.Error(
-			"failed to route stage result",
+			"failed to route stages result",
 			"pipeline_id", data.PipelineID,
 			"task_id", data.TaskID,
-			"stage", data.Stage,
+			"stages", data.Stage,
 			"err", err,
 		)
 	}
@@ -160,7 +160,7 @@ func (w *StageResultWorker) routeStageResult(
 
 	default:
 		return fmt.Errorf(
-			"unsupported stage: %s",
+			"unsupported stages: %s",
 			result.PipelineData.Stage,
 		)
 	}
