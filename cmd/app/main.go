@@ -2,19 +2,22 @@ package main
 
 import (
 	"context"
-	"log"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
-	"urls_etl/internal/infra/shutdown"
 
 	"golang.org/x/sync/errgroup"
 
-	"urls_etl/internal/domain"
+	"urls_etl/internal/domain_new/pipeline"
+	"urls_etl/internal/domain_new/requests"
+	"urls_etl/internal/domain_new/stage"
 	"urls_etl/internal/infra/db/postgresql"
 	"urls_etl/internal/infra/http_client"
+	"urls_etl/internal/infra/shutdown"
 )
 
-var urls = []domain.RequestData{
+var urls = []pipeline.RequestData{
 	{
 		URL: "http://localhost:8080/getItems",
 		Headers: map[string]string{
@@ -33,15 +36,19 @@ var urls = []domain.RequestData{
 	},
 }
 
+// main запускает приложение и задает код завершения.
 func main() {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	if err := run(); err != nil {
+		slog.Error("application failed", "err", err)
+		os.Exit(1)
+	}
+}
 
-	go watchShutdown(ctx, cancel, shutdown.OSSource{})
-
+// run создает зависимости, запускает пайплайн и ожидает завершения воркеров.
+func run() error {
 	cfg, err := loadConfig()
 	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
+		return fmt.Errorf("load configuration: %w", err)
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
@@ -49,93 +56,94 @@ func main() {
 	}))
 	slog.SetDefault(logger)
 
-	// Общий канал задач для выполнения HTTP-запросов.
-	requestChannel := make(
-		chan domain.PipelineData,
-		cfg.Workers.RequestChannelLen,
-	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	// Входные каналы HTTP-воркеров.
-	firstWorkerCh := make(
-		chan domain.PipelineData,
-		cfg.Workers.WorkerChannelLen,
-	)
-
-	secondWorkerCh := make(
-		chan domain.PipelineData,
-		cfg.Workers.WorkerChannelLen,
-	)
-
-	// Канал результатов HTTP-запросов.
-	stageResultCh := make(
-		chan domain.RequestResult,
-		cfg.Workers.WorkerChannelLen,
-	)
+	go watchShutdown(ctx, cancel, shutdown.OSSource{})
 
 	client := http_client.NewHTTPClient(cfg.HTTP)
+	defer client.CloseIdleConnections()
+
 	httpRequester := http_client.NewHttpRequester(client, cfg.HTTP)
 
 	dbConnection, err := postgresql.NewConnection(ctx, cfg.Postgres)
 	if err != nil {
-		log.Fatalf("no connection to db: %s", err)
+		return fmt.Errorf("connect to PostgreSQL: %w", err)
 	}
-	defer dbConnection.Close()
+	defer func() {
+		if err := dbConnection.Close(); err != nil {
+			slog.Error("failed to close database connection", "err", err)
+		}
+	}()
 
 	repo := postgresql.NewRepo(dbConnection)
 
-	requestBuilders := []domain.ItemsRequestBuilder{
-		domain.BuildFillItemsRequest,
-		domain.BuildScoreItemsRequest,
-		domain.BuildLogItemsRequest,
+	requestChannel := make(
+		chan pipeline.PipelineData,
+		cfg.Workers.RequestChannelLen,
+	)
+
+	firstWorkerCh := make(
+		chan pipeline.PipelineData,
+		cfg.Workers.WorkerChannelLen,
+	)
+
+	secondWorkerCh := make(
+		chan pipeline.PipelineData,
+		cfg.Workers.WorkerChannelLen,
+	)
+
+	stageResultCh := make(
+		chan pipeline.RequestResult,
+		cfg.Workers.WorkerChannelLen,
+	)
+
+	requestBuilders := []stage.ItemsRequestBuilder{
+		stage.BuildFillItemsRequest,
+		stage.BuildScoreItemsRequest,
+		stage.BuildLogItemsRequest,
 	}
 
-	pipelineCoordinator := domain.NewPipelineCoordinator()
+	coordinator := pipeline.NewPipelineCoordinator()
 
-	firstRequestWorker := domain.NewRequestWorker(
+	firstRequestWorker := requests.NewRequestWorker(
 		1,
 		firstWorkerCh,
 		httpRequester,
 		stageResultCh,
 	)
 
-	secondRequestWorker := domain.NewRequestWorker(
+	secondRequestWorker := requests.NewRequestWorker(
 		2,
 		secondWorkerCh,
 		httpRequester,
 		stageResultCh,
 	)
 
-	stageResultWorker := domain.NewStageResultWorker(
+	stageResultWorker := stage.NewStageResultWorker(
 		repo,
 		stageResultCh,
 		requestChannel,
 		requestBuilders,
-		pipelineCoordinator,
+		coordinator,
 	)
 
-	// Основная группа долгоживущих goroutine приложения.
-	//
 	group, groupCtx := errgroup.WithContext(ctx)
 
-	// Отдельная группа нужна только для RequestWorker.
-	//
-	// Все RequestWorker являются producer-ами stageResultCh.
-	// Поэтому stageResultCh можно закрыть только после завершения
-	// всех HTTP-воркеров.
+	// Отдельная группа отслеживает всех отправителей результатов.
 	requestWorkersGroup, requestWorkersCtx := errgroup.WithContext(groupCtx)
 
 	group.Go(func() error {
-		domain.DispatchRequests(
+		requests.DispatchRequests(
 			groupCtx,
 			requestChannel,
 			firstWorkerCh,
 			secondWorkerCh,
 		)
-
 		return nil
 	})
 
-	// TODO: Сделать количество requests-ов и их каналы динамическими.
+	// TODO: Сделать количество воркеров и их каналы динамическими.
 	requestWorkersGroup.Go(func() error {
 		firstRequestWorker.Run(requestWorkersCtx)
 		return nil
@@ -146,13 +154,10 @@ func main() {
 		return nil
 	})
 
-	// Закрываем stageResultCh только после завершения всех его producer-ов.
-	//
-	// Эта goroutine входит в основную группу, потому что она связывает
-	// жизненный цикл группы RequestWorker с остальной частью pipeline.
 	group.Go(func() error {
 		err := requestWorkersGroup.Wait()
 
+		// Закрываем канал после завершения всех его отправителей.
 		close(stageResultCh)
 
 		return err
@@ -163,17 +168,19 @@ func main() {
 		return nil
 	})
 
-	if runPipeErr := domain.RunPipeline(
+	runPipeErr := pipeline.RunPipeline(
 		groupCtx,
 		urls,
 		requestChannel,
 		repo,
-		pipelineCoordinator,
-	); runPipeErr != nil {
-		slog.Error("RunPipeline failed", "err", runPipeErr)
+		coordinator,
+	)
+	if runPipeErr != nil {
+		// Останавливаем воркеры перед ожиданием их завершения.
+		cancel()
 	}
 
-	if err := group.Wait(); err != nil {
-		slog.Error("pipeline stopped with error", "err", err)
-	}
+	groupErr := group.Wait()
+
+	return errors.Join(runPipeErr, groupErr)
 }
