@@ -2,7 +2,7 @@ package postgresql
 
 import (
 	"context"
-	"urls_etl/internal/domain_new/pipeline"
+	"urls_etl/internal/domain/pipeline"
 
 	"github.com/uptrace/bun"
 )

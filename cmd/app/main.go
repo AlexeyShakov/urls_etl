@@ -10,9 +10,9 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"urls_etl/internal/config"
-	"urls_etl/internal/domain_new/pipeline"
-	"urls_etl/internal/domain_new/requests"
-	"urls_etl/internal/domain_new/stages"
+	"urls_etl/internal/domain/pipeline"
+	"urls_etl/internal/domain/requests"
+	"urls_etl/internal/domain/stages"
 	"urls_etl/internal/infra/db/postgresql"
 	"urls_etl/internal/infra/http_client"
 	"urls_etl/internal/infra/shutdown"

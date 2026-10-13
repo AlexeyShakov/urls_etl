@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 
-	"urls_etl/internal/domain_new/pipeline"
+	"urls_etl/internal/domain/pipeline"
 )
 
 // DispatchRequests распределяет запросы между двумя каналами воркеров.

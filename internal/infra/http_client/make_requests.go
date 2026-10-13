@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 	"urls_etl/internal/config"
-	"urls_etl/internal/domain_new/pipeline"
+	"urls_etl/internal/domain/pipeline"
 )
 
 // Максимальный размер тела ответа — 1 MiB.

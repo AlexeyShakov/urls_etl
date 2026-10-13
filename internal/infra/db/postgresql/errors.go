@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"urls_etl/internal/domain_new/pipeline"
+	"urls_etl/internal/domain/pipeline"
 
 	"github.com/jackc/pgerrcode"
 	"github.com/uptrace/bun/driver/pgdriver"

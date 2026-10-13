@@ -3,7 +3,7 @@ package stages
 import (
 	"encoding/json"
 
-	"urls_etl/internal/domain_new/pipeline"
+	"urls_etl/internal/domain/pipeline"
 )
 
 // ItemsRequestBuilder формирует запрос следующей стадии для списка товаров.

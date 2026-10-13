@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"time"
 
-	"urls_etl/internal/domain_new/pipeline"
+	"urls_etl/internal/domain/pipeline"
 )
 
 // StageResultRepository сохраняет результаты выполнения стадий.
