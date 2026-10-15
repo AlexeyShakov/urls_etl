@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -45,7 +44,7 @@ func main() {
 	}
 }
 
-// run создает зависимости, запускает пайплайн и ожидает завершения воркеров.
+// run создает зависимости, запускает воркеры и передает управление Runner.
 func run() error {
 	workerCfg := config.NewDefaultWorkersConfig()
 	httpCfg := config.NewDefaultHTTPConfig()
@@ -80,24 +79,53 @@ func run() error {
 
 	repo := postgresql.NewRepo(dbConnection)
 
-	requestChannel := make(
-		chan pipeline.PipelineData,
-		workerCfg.RequestChannelLen,
+	// Каналы обработки GetItems.
+	getItemsReqCh := make(chan pipeline.PipelineData, workerCfg.ChannelsLen)
+	firstReqWorkerCh := make(chan pipeline.PipelineData, workerCfg.ChannelsLen)
+	secondReqWorkerCh := make(chan pipeline.PipelineData, workerCfg.ChannelsLen)
+	getItemsResCh := make(chan pipeline.RequestResult, workerCfg.ChannelsLen)
+
+	// Общие каналы downstream-воркеров.
+	downstreamReqCh := make(chan pipeline.PipelineData, workerCfg.ChannelsLen)
+	downstreamResCh := make(chan pipeline.RequestResult, workerCfg.ChannelsLen)
+
+	getItemsCoordinator := requests.NewChannelCoordinator(
+		2,
+		getItemsResCh,
 	)
 
-	firstWorkerCh := make(
-		chan pipeline.PipelineData,
-		workerCfg.WorkerChannelLen,
+	downstreamCoordinator := requests.NewChannelCoordinator(
+		2,
+		downstreamResCh,
 	)
 
-	secondWorkerCh := make(
-		chan pipeline.PipelineData,
-		workerCfg.WorkerChannelLen,
+	// todo надо подумать, как сделать создание воркеров динамически
+	firstGetItemsWorker := requests.NewRequestWorker(
+		1,
+		firstReqWorkerCh,
+		httpRequester,
+		getItemsResCh,
 	)
 
-	stageResultCh := make(
-		chan pipeline.RequestResult,
-		workerCfg.WorkerChannelLen,
+	secondGetItemsWorker := requests.NewRequestWorker(
+		2,
+		secondReqWorkerCh,
+		httpRequester,
+		getItemsResCh,
+	)
+
+	firstDownstreamWorker := requests.NewRequestWorker(
+		3,
+		downstreamReqCh,
+		httpRequester,
+		downstreamResCh,
+	)
+
+	secondDownstreamWorker := requests.NewRequestWorker(
+		4,
+		downstreamReqCh,
+		httpRequester,
+		downstreamResCh,
 	)
 
 	requestBuilders := []stages.ItemsRequestBuilder{
@@ -106,82 +134,79 @@ func run() error {
 		stages.BuildLogItemsRequest,
 	}
 
-	coordinator := pipeline.NewPipelineCoordinator()
-
-	firstRequestWorker := requests.NewRequestWorker(
-		1,
-		firstWorkerCh,
-		httpRequester,
-		stageResultCh,
-	)
-
-	secondRequestWorker := requests.NewRequestWorker(
-		2,
-		secondWorkerCh,
-		httpRequester,
-		stageResultCh,
-	)
-
-	stageResultWorker := stages.NewStageResultWorker(
+	getItemsResultWorker := stages.NewGetItemsResultWorker(
 		repo,
-		stageResultCh,
-		requestChannel,
+		getItemsResCh,
+		downstreamReqCh,
 		requestBuilders,
-		coordinator,
+	)
+
+	downstreamResultWorker := stages.NewDownstreamResultWorker(
+		repo,
+		downstreamResCh,
 	)
 
 	group, groupCtx := errgroup.WithContext(ctx)
 
-	// Отдельная группа отслеживает всех отправителей результатов.
-	requestWorkersGroup, requestWorkersCtx := errgroup.WithContext(groupCtx)
-
+	// Диспетчер закрывает индивидуальные входные каналы GetItems-воркеров.
 	group.Go(func() error {
 		requests.DispatchRequests(
 			groupCtx,
-			requestChannel,
-			firstWorkerCh,
-			secondWorkerCh,
+			getItemsReqCh,
+			firstReqWorkerCh,
+			secondReqWorkerCh,
 		)
 		return nil
 	})
 
-	// TODO: Сделать количество воркеров и их каналы динамическими.
-	requestWorkersGroup.Go(func() error {
-		firstRequestWorker.Run(requestWorkersCtx)
-		return nil
-	})
+	// Координатор закрывает getItemsResCh после завершения обоих отправителей.
+	group.Go(func() error {
+		defer getItemsCoordinator.Done()
 
-	requestWorkersGroup.Go(func() error {
-		secondRequestWorker.Run(requestWorkersCtx)
+		firstGetItemsWorker.Run(groupCtx)
 		return nil
 	})
 
 	group.Go(func() error {
-		err := requestWorkersGroup.Wait()
+		defer getItemsCoordinator.Done()
 
-		// Закрываем канал после завершения всех его отправителей.
-		close(stageResultCh)
-
-		return err
-	})
-
-	group.Go(func() error {
-		stageResultWorker.Run(groupCtx)
+		secondGetItemsWorker.Run(groupCtx)
 		return nil
 	})
 
-	runPipeErr := pipeline.RunPipeline(
-		groupCtx,
-		urls,
-		requestChannel,
+	// Обработчик закрывает downstreamReqCh после завершения отправки.
+	group.Go(func() error {
+		getItemsResultWorker.Run(groupCtx)
+		return nil
+	})
+
+	// Координатор закрывает downstreamResCh после завершения обоих отправителей.
+	group.Go(func() error {
+		defer downstreamCoordinator.Done()
+
+		firstDownstreamWorker.Run(groupCtx)
+		return nil
+	})
+
+	group.Go(func() error {
+		defer downstreamCoordinator.Done()
+
+		secondDownstreamWorker.Run(groupCtx)
+		return nil
+	})
+
+	group.Go(func() error {
+		downstreamResultWorker.Run(groupCtx)
+		return nil
+	})
+
+	// Runner закрывает getItemsReqCh, ожидает всю группу и финализирует пайплайн.
+	runner := pipeline.NewRunner(
 		repo,
-		coordinator,
+		getItemsReqCh,
+		group,
+		cancel,
 	)
-	if runPipeErr != nil {
-		cancel()
-	}
 
-	groupErr := group.Wait()
-
-	return errors.Join(runPipeErr, groupErr)
+	return runner.Run(ctx, groupCtx, urls)
 }

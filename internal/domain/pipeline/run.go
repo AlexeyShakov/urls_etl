@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 )
@@ -18,60 +19,108 @@ type RunPipelineRepository interface {
 	) error
 }
 
-type RunPipelineCoordinator interface {
-	// Add увеличивает количество незавершенных работ.
-	Add(n int)
-
-	// Done отмечает завершение одной работы.
-	Done()
-
-	// FinishInitialUrlsSubmission отмечает завершение отправки начальных задач.
-	FinishInitialUrlsSubmission()
-
-	// Wait ожидает завершения всех работ или отмены контекста.
-	Wait(ctx context.Context) error
+// ExecutionWaiter ожидает завершения всех воркеров и обработчиков результатов.
+type ExecutionWaiter interface {
+	Wait() error
 }
 
-// RunPipeline создает задачи, отправляет начальные запросы и финализирует статусы.
+// Runner управляет созданием, выполнением и финализацией пайплайна.
 //
-// После завершения всех работ закрывает ch.
-// При досрочной ошибке не закрывает ch: вызывающий код должен отменить
-// общий контекст и дождаться завершения всех воркеров.
-func RunPipeline(
-	ctx context.Context,
-	urls []RequestData,
-	ch chan<- PipelineData,
+// Используется для одного запуска и является единственным отправителем в ch.
+type Runner struct {
+	repo   RunPipelineRepository
+	ch     chan<- PipelineData
+	waiter ExecutionWaiter
+	cancel context.CancelFunc
+}
+
+// NewRunner создает оркестратор пайплайна.
+func NewRunner(
 	repo RunPipelineRepository,
-	coordinator RunPipelineCoordinator,
+	ch chan<- PipelineData,
+	waiter ExecutionWaiter,
+	cancel context.CancelFunc,
+) *Runner {
+	return &Runner{
+		repo:   repo,
+		ch:     ch,
+		waiter: waiter,
+		cancel: cancel,
+	}
+}
+
+// Run создает пайплайн, отправляет задачи и финализирует результаты обработки.
+func (p *Runner) Run(
+	ctx context.Context,
+	executionCtx context.Context,
+	urls []RequestData,
 ) error {
+	pipelineID, err := p.createPipeline(executionCtx)
+	if err != nil {
+		close(p.ch)
+		p.cancel()
+
+		return errors.Join(err, p.waiter.Wait())
+	}
+
+	processErr := p.processURLs(executionCtx, urls, pipelineID)
+
+	// Начальные запросы больше не появятся.
+	close(p.ch)
+
+	if processErr != nil {
+		p.cancel()
+	}
+
+	waitErr := p.waiter.Wait()
+	if err := errors.Join(processErr, waitErr); err != nil {
+		return err
+	}
+
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
-	pipelineID, err := savePipeline(ctx, repo)
-	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
-		}
+	return p.finalizePipeline(ctx, pipelineID)
+}
 
-		if !IsRetryable(err) {
-			return fmt.Errorf("create pipeline: %w", err)
-		}
-
-		slog.Warn(SavingPipeFail, "err", err)
-
-		pipelineID, err = savePipeline(ctx, repo)
-		if err != nil {
-			return fmt.Errorf("create pipeline after retry: %w", err)
-		}
+// createPipeline сохраняет пайплайн с одним ретраем при временной ошибке.
+func (p *Runner) createPipeline(ctx context.Context) (int64, error) {
+	pipelineID, err := p.savePipeline(ctx)
+	if err == nil {
+		return pipelineID, nil
 	}
 
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return 0, ctxErr
+	}
+
+	if !IsRetryable(err) {
+		return 0, fmt.Errorf("create pipeline: %w", err)
+	}
+
+	slog.Warn(SavingPipeFail, "err", err)
+
+	pipelineID, err = p.savePipeline(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("create pipeline after retry: %w", err)
+	}
+
+	return pipelineID, nil
+}
+
+// processURLs сохраняет задачи и отправляет начальные запросы GetItems.
+func (p *Runner) processURLs(
+	ctx context.Context,
+	urls []RequestData,
+	pipelineID int64,
+) error {
 	for _, req := range urls {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 
-		taskID, err := saveTask(ctx, repo, req, pipelineID)
+		taskID, err := p.saveTask(ctx, req, pipelineID)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
@@ -94,7 +143,7 @@ func RunPipeline(
 				"err", err,
 			)
 
-			taskID, err = saveTask(ctx, repo, req, pipelineID)
+			taskID, err = p.saveTask(ctx, req, pipelineID)
 			if err != nil {
 				if ctxErr := ctx.Err(); ctxErr != nil {
 					return ctxErr
@@ -110,31 +159,27 @@ func RunPipeline(
 			}
 		}
 
-		coordinator.Add(1)
-
 		select {
-		case ch <- PipelineData{
+		case p.ch <- PipelineData{
 			PipelineID: pipelineID,
 			TaskID:     taskID,
 			Request:    req,
 			Stage:      StageGetItems,
 		}:
 		case <-ctx.Done():
-			coordinator.Done()
 			return ctx.Err()
 		}
 	}
 
-	coordinator.FinishInitialUrlsSubmission()
+	return nil
+}
 
-	if err := coordinator.Wait(ctx); err != nil {
-		return err
-	}
-
-	// Все работы завершены, включая отправку запросов следующих стадий.
-	close(ch)
-
-	if err := repo.UpdatePipelineTaskStatuses(ctx, pipelineID); err != nil {
+// finalizePipeline обновляет статусы задач и отмечает завершение пайплайна.
+func (p *Runner) finalizePipeline(
+	ctx context.Context,
+	pipelineID int64,
+) error {
+	if err := p.repo.UpdatePipelineTaskStatuses(ctx, pipelineID); err != nil {
 		return fmt.Errorf(
 			"update task statuses for pipeline %d: %w",
 			pipelineID,
@@ -142,35 +187,27 @@ func RunPipeline(
 		)
 	}
 
-	if err := repo.UpdatePipelineStatus(
+	if err := p.repo.UpdatePipelineStatus(
 		ctx,
 		PipelineStatusFinished,
 		pipelineID,
 	); err != nil {
-		return fmt.Errorf(
-			"finish pipeline %d: %w",
-			pipelineID,
-			err,
-		)
+		return fmt.Errorf("finish pipeline %d: %w", pipelineID, err)
 	}
 
 	return nil
 }
 
 // savePipeline сохраняет пайплайн в состоянии обработки.
-func savePipeline(
-	ctx context.Context,
-	repo RunPipelineRepository,
-) (int64, error) {
-	return repo.SavePipeline(ctx, Pipeline{
+func (p *Runner) savePipeline(ctx context.Context) (int64, error) {
+	return p.repo.SavePipeline(ctx, Pipeline{
 		Status: PipelineStatusProcessing,
 	})
 }
 
 // saveTask сохраняет задачу с подробностями исходного запроса.
-func saveTask(
+func (p *Runner) saveTask(
 	ctx context.Context,
-	repo RunPipelineRepository,
 	request RequestData,
 	pipelineID int64,
 ) (int64, error) {
@@ -179,7 +216,7 @@ func saveTask(
 		return 0, fmt.Errorf("marshal task request: %w", err)
 	}
 
-	return repo.SavePipelineTask(ctx, PipelineTask{
+	return p.repo.SavePipelineTask(ctx, PipelineTask{
 		PipelineID: pipelineID,
 		SourceURL:  request.URL,
 		Details:    detailsJSON,

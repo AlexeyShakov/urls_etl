@@ -89,7 +89,7 @@ requests_samples = [
 <details>
 <summary><strong>4.1 Общая архитектура</strong></summary>
 
-![Architecture](docs/arch.png)
+![Architecture](docs/arch.svg)
 
 Pipeline построен вокруг нескольких долгоживущих goroutine, которые обмениваются задачами и результатами через channels.
 
