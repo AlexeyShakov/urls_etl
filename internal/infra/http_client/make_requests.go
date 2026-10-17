@@ -1,15 +1,20 @@
-package http
+package http_client
 
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"time"
 	"urls_etl/internal/config"
-	"urls_etl/internal/domain"
+	"urls_etl/internal/domain/pipeline"
 )
+
+// Максимальный размер тела ответа — 1 MiB.
+// Значение лучше передавать из HTTP-конфига.
+const maxResponseBodyBytes int64 = 1 << 20
 
 type HTTPRequester struct {
 	client *http.Client
@@ -18,8 +23,8 @@ type HTTPRequester struct {
 
 func (r *HTTPRequester) Do(
 	ctx context.Context,
-	pipelineData domain.PipelineData,
-) domain.ResponseData {
+	pipelineData pipeline.PipelineData,
+) pipeline.ResponseData {
 	return makeRequestWithRetry(
 		ctx,
 		r.client,
@@ -52,18 +57,33 @@ func NewHttpRequester(client *http.Client, cfg config.HTTPConfig) *HTTPRequester
 func makeRequestWithRetry(
 	ctx context.Context,
 	client *http.Client,
-	req domain.RequestData,
+	req pipeline.RequestData,
 	maxRetries int,
-) domain.ResponseData {
-	var lastResp domain.ResponseData
+) pipeline.ResponseData {
+	var lastResp pipeline.ResponseData
 	var lastErr error
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		resp, err := makeRequest(ctx, client, req)
 
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			if err != nil {
+				return pipeline.ResponseData{
+					URL: req.URL,
+					Err: ctxErr,
+				}
+			}
+			resp.Err = ctxErr
+			return resp
+		}
+
+		if errors.Is(err, ErrResponseBodyTooLarge) {
+			return resp
+		}
+
 		if err != nil {
 			lastErr = err
-			lastResp = domain.ResponseData{
+			lastResp = pipeline.ResponseData{
 				URL: req.URL,
 				Err: err,
 			}
@@ -84,7 +104,12 @@ func makeRequestWithRetry(
 		}
 
 		if attempt < maxRetries {
-			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
+			delay := time.Duration(attempt) * 500 * time.Millisecond
+
+			if err := waitBeforeRetry(ctx, delay); err != nil {
+				lastResp.Err = err
+				return lastResp
+			}
 		}
 	}
 
@@ -99,6 +124,19 @@ func makeRequestWithRetry(
 	return lastResp
 }
 
+// waitBeforeRetry ожидает задержку или отмену контекста.
+func waitBeforeRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // makeRequest создает и отправляет один HTTP-запрос.
 //
 // Функция возвращает ResponseData со статус-кодом и телом ответа.
@@ -106,8 +144,8 @@ func makeRequestWithRetry(
 func makeRequest(
 	ctx context.Context,
 	client *http.Client,
-	reqData domain.RequestData,
-) (domain.ResponseData, error) {
+	reqData pipeline.RequestData,
+) (pipeline.ResponseData, error) {
 	httpReq, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodPost,
@@ -115,7 +153,7 @@ func makeRequest(
 		bytes.NewBufferString(reqData.Payload),
 	)
 	if err != nil {
-		return domain.ResponseData{URL: reqData.URL, Err: err}, err
+		return pipeline.ResponseData{URL: reqData.URL, Err: err}, err
 	}
 
 	for key, value := range reqData.Headers {
@@ -124,22 +162,36 @@ func makeRequest(
 
 	httpResp, err := client.Do(httpReq)
 	if err != nil {
-		return domain.ResponseData{URL: reqData.URL, Err: err}, err
+		return pipeline.ResponseData{URL: reqData.URL, Err: err}, err
 	}
 	defer func() {
 		_ = httpResp.Body.Close()
 	}()
 
-	bodyBytes, err := io.ReadAll(httpResp.Body)
+	bodyBytes, err := io.ReadAll(io.LimitReader(httpResp.Body, maxResponseBodyBytes+1))
+
 	if err != nil {
-		return domain.ResponseData{
+		return pipeline.ResponseData{
 			URL:        reqData.URL,
 			StatusCode: httpResp.StatusCode,
 			Err:        err,
 		}, err
 	}
 
-	return domain.ResponseData{
+	if int64(len(bodyBytes)) > maxResponseBodyBytes {
+		err := fmt.Errorf(
+			"%w: limit is %d bytes",
+			ErrResponseBodyTooLarge,
+			maxResponseBodyBytes,
+		)
+		return pipeline.ResponseData{
+			URL:        reqData.URL,
+			StatusCode: httpResp.StatusCode,
+			Err:        err,
+		}, err
+	}
+
+	return pipeline.ResponseData{
 		URL:        reqData.URL,
 		StatusCode: httpResp.StatusCode,
 		Body:       string(bodyBytes),

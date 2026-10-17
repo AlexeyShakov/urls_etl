@@ -2,10 +2,9 @@ package postgresql
 
 import (
 	"context"
+	"urls_etl/internal/domain/pipeline"
 
 	"github.com/uptrace/bun"
-
-	"urls_etl/internal/domain"
 )
 
 type PipelineRepo struct {
@@ -20,7 +19,7 @@ func NewRepo(db *bun.DB) *PipelineRepo {
 
 func (p *PipelineRepo) SavePipeline(
 	ctx context.Context,
-	pipeline domain.Pipeline,
+	pipeline pipeline.Pipeline,
 ) (int64, error) {
 	model := pipelineModel{
 		Status:     string(pipeline.Status),
@@ -40,7 +39,7 @@ func (p *PipelineRepo) SavePipeline(
 
 func (p *PipelineRepo) SavePipelineTask(
 	ctx context.Context,
-	task domain.PipelineTask,
+	task pipeline.PipelineTask,
 ) (int64, error) {
 	model := pipelineTaskModel{
 		PipelineID: task.PipelineID,
@@ -62,7 +61,7 @@ func (p *PipelineRepo) SavePipelineTask(
 
 func (p *PipelineRepo) SaveStageResult(
 	ctx context.Context,
-	result domain.StageResult,
+	result pipeline.StageResult,
 ) error {
 	model := stageResultModel{
 		TaskID:  result.TaskID,
@@ -87,7 +86,7 @@ func (p *PipelineRepo) SaveStageResult(
 // Во всех остальных случаях задача помечается как failed.
 //
 // TODO: При добавлении повторных запусков стадий учитывать
-// только последнюю попытку для каждой пары task_id и stage.
+// только последнюю попытку для каждой пары task_id и stages.
 // TODO: этот вариант хорош только для MVP. Сейчас мы обрабатываем 1 млн тасок сразу
 // нужно сделать так, чтобы обрабатывать таски батчами по мере их обработки. В таком случае можно отдавать
 // промежуточный результат пользователю. Надо подумать, как это сделать
@@ -95,45 +94,41 @@ func (p *PipelineRepo) UpdatePipelineTaskStatuses(
 	ctx context.Context,
 	pipelineID int64,
 ) error {
-	requiredStages := []domain.Stage{
-		domain.StageGetItems,
-		domain.StageFillItems,
-		domain.StageScoreItems,
-		domain.StageLogItems,
+	requiredStages := []pipeline.Stage{
+		pipeline.StageGetItems,
+		pipeline.StageFillItems,
+		pipeline.StageScoreItems,
+		pipeline.StageLogItems,
 	}
 
-	query := `
-		UPDATE pipeline_tasks AS task
-		SET status = CASE
-			WHEN (
-				SELECT COUNT(DISTINCT result.stage)
-				FROM pipeline_stage_results AS result
-				WHERE result.task_id = task.id
-					AND result.stage IN (?)
-					AND result.status = ?
-			) = ?
-			THEN ?
-			ELSE ?
-		END
-		WHERE task.pipeline_id = ?
-	`
+	successfulStages := p.db.NewSelect().
+		TableExpr("pipeline_stage_results AS result").
+		ColumnExpr("COUNT(DISTINCT result.stages)").
+		Where("result.task_id = task.id").
+		Where("result.stages IN (?)", bun.In(requiredStages)).
+		Where("result.status = ?", string(pipeline.StageStatusSuccess))
 
-	_, err := p.db.NewRaw(
-		query,
-		bun.In(requiredStages),
-		string(domain.StageStatusSuccess),
-		len(requiredStages),
-		string(domain.TaskStatusSuccess),
-		string(domain.TaskStatusFailed),
-		pipelineID,
-	).Exec(ctx)
+	_, err := p.db.NewUpdate().
+		TableExpr("pipeline_tasks AS task").
+		Set(
+			`status = CASE
+				WHEN (?) = ? THEN ?
+				ELSE ?
+			END`,
+			successfulStages,
+			len(requiredStages),
+			string(pipeline.TaskStatusSuccess),
+			string(pipeline.TaskStatusFailed),
+		).
+		Where("task.pipeline_id = ?", pipelineID).
+		Exec(ctx)
 
 	return mapPostgresError(err)
 }
 
 func (p *PipelineRepo) UpdatePipelineStatus(
 	ctx context.Context,
-	status domain.PipelineStatus,
+	status pipeline.PipelineStatus,
 	pipelineID int64,
 ) error {
 	_, err := p.db.NewUpdate().

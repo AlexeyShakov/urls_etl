@@ -1,23 +1,22 @@
 package main
 
 import (
+	"log"
 	"log/slog"
 	"net/http"
 	"os"
-	"urls_etl/internal/config"
 	"urls_etl/internal/infra/mock_server"
-
-	"github.com/joho/godotenv"
 )
 
 func main() {
-	_ = godotenv.Load()
+	cfg, err := loadConfig()
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
+	}
 	logger := slog.New(
 		slog.NewTextHandler(
 			os.Stdout,
-			&slog.HandlerOptions{
-				Level: config.GetLogLevel(),
-			},
+			&slog.HandlerOptions{Level: cfg.Logging.Level},
 		),
 	)
 
